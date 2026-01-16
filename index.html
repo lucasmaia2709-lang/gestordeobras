@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Gestor de Obras</title>
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- iOS Support & Icons -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="ObraApp">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3790/3790510.png">
+    <meta name="theme-color" content="#2563eb">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    </script>
+
+    <style>
+        .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        input:disabled, select:disabled, textarea:disabled {
+            background-color: #f8fafc;
+            color: #475569;
+            cursor: not-allowed;
+            border-color: #e2e8f0;
+        }
+
+        /* Ajustes para iPhone (Safe Area) */
+        body {
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        @media print {
+            @page { margin: 0; size: A4; }
+            body { 
+                background: white; 
+                -webkit-print-color-adjust: exact; 
+                margin: 0; 
+                padding: 0;
+                visibility: hidden;
+            }
+            #print-container {
+                visibility: visible;
+                display: block !important;
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }
+            #print-container * { visibility: visible; }
+            aside, #mobile-header, #content-area, .modal, #global-loader { display: none !important; }
+            .page-break { page-break-before: always; }
+            .avoid-break { page-break-inside: avoid; }
+            img { max-width: 100% !important; }
+        }
+        
+        #print-container { display: none; }
+        .modal-open { display: flex !important; }
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+        .calendar-day { aspect-ratio: 1; }
+        #global-loader { position: fixed; inset: 0; background: rgba(255,255,255,0.9); z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    </style>
+</head>
+<body class="bg-slate-50 text-gray-800 font-sans h-screen flex flex-col md:flex-row overflow-hidden">
+
+    <div id="print-container"></div>
+
+    <div id="global-loader">
+        <i class="ph ph-spinner animate-spin text-4xl text-blue-600 mb-2"></i>
+        <p class="text-gray-500 font-medium">A carregar...</p>
+    </div>
+
+    <!-- Mobile Header -->
+    <div id="mobile-header" class="md:hidden bg-white shadow-sm p-4 flex justify-between items-center sticky top-0 z-50 shrink-0">
+        <div class="flex items-center space-x-2">
+            <i class="ph-fill ph-hard-hat text-blue-600 text-2xl"></i>
+            <span class="font-bold text-gray-800 text-lg">ObraApp</span>
+        </div>
+        <button onclick="window.toggleMobileMenu()" class="text-gray-600 focus:outline-none">
+            <i id="mobile-menu-icon" class="ph ph-list text-2xl"></i>
+        </button>
+    </div>
+
+    <!-- Sidebar Navigation -->
+    <aside id="sidebar" class="fixed inset-y-0 left-0 z-40 w-64 bg-white shadow-lg transform -translate-x-full transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:shadow-none border-r border-gray-200 flex flex-col hidden">
+        <div class="p-6 border-b border-gray-100 hidden md:flex items-center space-x-2 shrink-0">
+            <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
+                <i class="ph-fill ph-hard-hat text-xl"></i>
+            </div>
+            <span class="text-xl font-bold tracking-tight text-gray-800">ObraApp</span>
+        </div>
+
+        <div class="px-4 py-2">
+            <button onclick="window.backToProjectList()" class="w-full flex items-center space-x-2 text-sm text-gray-500 hover:text-blue-600 transition-colors py-2">
+                <i class="ph-bold ph-arrow-left"></i>
+                <span>Trocar Obra</span>
+            </button>
+        </div>
+
+        <nav class="p-4 space-y-2 flex-1 overflow-y-auto">
+            <button onclick="window.switchTab('calendar')" id="nav-calendar" class="nav-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-gray-600 hover:bg-blue-50">
+                <i class="ph ph-calendar text-xl"></i>
+                <span class="font-medium">Calendário</span>
+            </button>
+            <button onclick="window.switchTab('checklist')" id="nav-checklist" class="nav-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-gray-600 hover:bg-blue-50">
+                <i class="ph ph-checklist text-xl"></i>
+                <span class="font-medium">Checklist</span>
+            </button>
+            <button onclick="window.switchTab('companies')" id="nav-companies" class="nav-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-gray-600 hover:bg-blue-50">
+                <i class="ph ph-briefcase text-xl"></i>
+                <span class="font-medium">Cadastros</span>
+            </button>
+        </nav>
+
+        <div class="p-4 border-t border-gray-100 shrink-0">
+            <button onclick="window.openProjectModal(true)" class="w-full mb-4 flex items-center justify-center space-x-2 bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg text-sm transition-colors">
+                <i class="ph ph-gear"></i>
+                <span>Configurar Obra</span>
+            </button>
+            
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3 text-sm text-gray-500 overflow-hidden">
+                    <div class="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+                        <i class="ph-bold ph-user text-gray-600"></i>
+                    </div>
+                    <div class="overflow-hidden">
+                        <p class="font-medium text-gray-700 truncate" id="user-email-display">Utilizador</p>
+                    </div>
+                </div>
+                <button onclick="window.handleLogout()" class="text-gray-400 hover:text-red-500 p-2" title="Sair">
+                    <i class="ph-bold ph-sign-out text-lg"></i>
+                </button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Modal Projeto -->
+    <div id="project-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 items-center justify-center p-4 modal">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 fade-in">
+            <div class="flex justify-between items-center mb-6">
+                <h3 id="modal-title" class="text-xl font-bold text-gray-800">Nova Obra</h3>
+                <button onclick="window.closeProjectModal()" class="text-gray-400 hover:text-gray-600"><i class="ph ph-x text-2xl"></i></button>
+            </div>
+            <form onsubmit="window.handleProjectForm(event)" class="space-y-4">
+                <input type="hidden" id="modal-project-id">
+                <div><label class="block text-sm font-medium text-gray-700 mb-1">Nome da Obra</label><input type="text" id="modal-project-name" required class="w-full border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"></div>
+                <div><label class="block text-sm font-medium text-gray-700 mb-1">Cliente</label><input type="text" id="modal-client-name" required class="w-full border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"></div>
+                <div><label class="block text-sm font-medium text-gray-700 mb-1">Construtora</label><input type="text" id="modal-company-name" required class="w-full border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"></div>
+                <div><label class="block text-sm font-medium text-gray-700 mb-1">Data de Início</label><input type="date" id="modal-start-date" required class="w-full border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"></div>
+                <div><label class="block text-sm font-medium text-gray-700 mb-1">Status</label><select id="modal-status" class="w-full border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"><option value="Em Andamento">Em Andamento</option><option value="Atrasado">Atrasado</option><option value="Concluído">Concluído</option><option value="Paralisado">Paralisado</option></select></div>
+                <div class="pt-2"><button type="submit" id="btn-save-project" class="w-full bg-blue-600 text-white py-2 rounded-lg font-medium hover:bg-blue-700 transition flex justify-center">Salvar Obra</button></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 overflow-y-auto bg-slate-50 relative w-full h-full">
+        <div id="content-area" class="p-4 md:p-8 max-w-6xl mx-auto pb-20 no-print"></div>
+    </main>
+
+    <!-- FIREBASE MODULE & PWA REGISTRATION -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, doc, getDoc, getDocs, setDoc, deleteDoc, onSnapshot, query, where, updateDoc, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+
+        // REGISTRAR SERVICE WORKER (PWA)
+        // Apenas tenta registar se o protocolo for http ou https, ignorando ambientes de preview/blob
+        if ('serviceWorker' in navigator && (window.location.protocol.indexOf('http') === 0)) {
+            navigator.serviceWorker.register('./sw.js')
+                .then(() => console.log('Service Worker Registado'))
+                .catch(err => console.log('SW ignorado em ambiente local/preview:', err));
+        }
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyB4lYMnm7e01XjoXVD1w2z_6eWqtQRZ2JY",
+            authDomain: "gestorde-obras.firebaseapp.com",
+            projectId: "gestorde-obras",
+            storageBucket: "gestorde-obras.firebasestorage.app",
+            messagingSenderId: "1087144807634",
+            appId: "1:1087144807634:web:30cbf8ad83a33d7e7b710b",
+            measurementId: "G-MW6FVJFDW5"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const storage = getStorage(app);
+        const auth = getAuth(app);
+
+        let state = {
+            user: null, view: 'auth', authMode: 'login', currentProjectId: null, currentProjectData: null, activeTab: 'calendar',
+            isMobileMenuOpen: false, selectedDate: new Date().toISOString().split('T')[0], calendarViewDate: new Date(),
+            projects: [], logsCache: {}, currentDailyLog: null, isEditing: true
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            const loader = document.getElementById('global-loader');
+            if (user) { state.user = user; document.getElementById('user-email-display').textContent = user.email; initApp(); } 
+            else { state.user = null; state.view = 'auth'; state.projects = []; if(loader) loader.style.display = 'none'; renderApp(); }
+        });
+
+        function initApp() {
+            const q = query(collection(db, `users/${state.user.uid}/projects`));
+            onSnapshot(q, (snapshot) => {
+                state.projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (state.currentProjectId) state.currentProjectData = state.projects.find(p => p.id === state.currentProjectId);
+                if (state.view === 'auth') state.view = 'projectList';
+                document.getElementById('global-loader').style.display = 'none';
+                renderApp(false); 
+            }, (error) => { console.error(error); document.getElementById('global-loader').style.display = 'none'; });
+        }
+
+        window.toggleAuthMode = () => { state.authMode = state.authMode === 'login' ? 'register' : 'login'; renderApp(true); };
+        window.handleAuth = async (e) => {
+            e.preventDefault(); const email = document.getElementById('auth-email').value; const password = document.getElementById('auth-password').value;
+            const btn = document.getElementById('auth-btn'); const err = document.getElementById('auth-error');
+            if (password.length < 6) { err.innerHTML = 'Senha min 6 chars.'; err.classList.remove('hidden'); return; }
+            btn.disabled = true; btn.innerHTML = '...'; err.classList.add('hidden');
+            try {
+                if (state.authMode === 'register') await createUserWithEmailAndPassword(auth, email, password);
+                else await signInWithEmailAndPassword(auth, email, password);
+            } catch (e) { btn.disabled = false; btn.innerText = 'Tentar Novamente'; err.textContent = e.message; err.classList.remove('hidden'); }
+        };
+        window.handleLogout = async () => { try { await signOut(auth); } catch (e) {} };
+        window.toggleMobileMenu = () => { state.isMobileMenuOpen = !state.isMobileMenuOpen; const s = document.getElementById('sidebar'); if(state.isMobileMenuOpen) s.classList.remove('-translate-x-full','hidden'); else s.classList.add('-translate-x-full','hidden'); };
+        window.switchTab = (t) => { state.activeTab = t; if (state.isMobileMenuOpen) window.toggleMobileMenu(); renderApp(true); };
+        window.backToProjectList = () => { state.currentProjectId = null; state.view = 'projectList'; renderApp(true); };
+
+        window.selectProject = async (id) => {
+            state.currentProjectId = id; state.currentProjectData = state.projects.find(p => p.id === id); state.view = 'projectDetails'; state.activeTab = 'calendar';
+            onSnapshot(collection(db, `users/${state.user.uid}/projects/${id}/dailyLogs`), (s) => {
+                state.logsCache = {}; s.docs.forEach(d => state.logsCache[d.id] = d.data()); renderApp(false);
+            });
+            await window.loadDailyLogForDate(state.selectedDate); renderApp(true);
+        };
+
+        window.changeDate = async (v) => { state.selectedDate = v; await window.loadDailyLogForDate(v); renderApp(false); };
+        window.goToDate = async (d) => { state.selectedDate = d; await window.loadDailyLogForDate(d); window.switchTab('daily'); };
+        window.changeMonth = (o) => { state.calendarViewDate.setMonth(state.calendarViewDate.getMonth() + o); renderApp(false); };
+
+        window.loadDailyLogForDate = async (date) => {
+            if(!state.currentProjectId) return;
+            const c = state.logsCache[date];
+            if (c) { state.currentDailyLog = JSON.parse(JSON.stringify(c)); state.isEditing = false; }
+            else { state.currentDailyLog = createEmptyLog(); state.isEditing = true; }
+        };
+
+        window.enableEditMode = () => { state.isEditing = true; renderProjectContent(false); };
+        
+        window.persistCurrentLog = async () => {
+            if(!state.currentProjectId) return;
+            const btn = document.getElementById('save-btn'); const old = btn.innerHTML; btn.innerHTML = '...'; btn.disabled = true;
+            try {
+                await setDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}/dailyLogs/${state.selectedDate}`), state.currentDailyLog, { merge: true });
+                state.isEditing = false; btn.innerHTML = 'Salvo!'; setTimeout(() => renderProjectContent(false), 800);
+            } catch (e) { alert("Erro ao salvar."); btn.innerHTML = old; btn.disabled = false; }
+        };
+
+        window.updateDailyLogData = (f, v) => { state.currentDailyLog[f] = v; if(f === 'weather') renderProjectContent(false); };
+        window.updateSubItem = (arr, i, f, v) => { state.currentDailyLog[arr][i][f] = v; };
+        
+        window.addSubItem = (arr, obj) => {
+            state.currentDailyLog[arr].push(obj);
+            const cont = document.getElementById('content-area'); const main = document.querySelector('main');
+            const scroll = main ? main.scrollTop : 0; const h = cont.offsetHeight; cont.style.minHeight = h + 'px';
+            renderProjectContent(false);
+            setTimeout(() => { cont.style.minHeight = ''; if(main) main.scrollTop = scroll; }, 0);
+        };
+
+        window.removeSubItem = (arr, i) => { state.currentDailyLog[arr].splice(i, 1); renderProjectContent(false); };
+
+        async function uploadFile(input, pathType) {
+            if (input.files[0]) {
+                const file = input.files[0];
+                const sRef = ref(storage, `users/${state.user.uid}/projects/${state.currentProjectId}/${pathType}/${Date.now()}_${file.name}`);
+                try {
+                    const snap = await uploadBytes(sRef, file); const url = await getDownloadURL(snap.ref);
+                    if(pathType === 'photos') state.currentDailyLog.photos.push({ url, caption: 'Foto', storagePath: snap.ref.fullPath });
+                    else { state.currentDailyLog.meeting.pdfFile = url; state.currentDailyLog.meeting.pdfName = file.name; }
+                    await setDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}/dailyLogs/${state.selectedDate}`), state.currentDailyLog, { merge: true });
+                    renderProjectContent(false);
+                } catch(e) { alert("Erro upload (Verifique regras Firebase): " + e.message); }
+            }
+        }
+        window.handlePhotoUpload = (i) => uploadFile(i, 'photos');
+
+        window.addCompany = async () => { const v = document.getElementById('new-company-name').value; if(v) { await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { companies: arrayUnion({ id: Date.now(), name: v }) }); } };
+        window.deleteCompany = async (id) => { if(confirm('Apagar?')) { const n = state.currentProjectData.companies.filter(c => c.id !== id); await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { companies: n }); } };
+        window.addChecklist = async () => { const v = document.getElementById('new-todo').value; if(v) { await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { checklist: arrayUnion({ id: Date.now(), text: v, completed: false }) }); } };
+        window.toggleChecklist = async (id) => { const n = state.currentProjectData.checklist.map(i => i.id === id ? { ...i, completed: !i.completed } : i); await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { checklist: n }); };
+        window.deleteChecklistItem = async (id) => { const n = state.currentProjectData.checklist.filter(i => i.id !== id); await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { checklist: n }); };
+
+        window.toggleDailyMeeting = (c) => { state.currentDailyLog.meeting.hasMeeting = c; renderProjectContent(false); };
+        window.updateDailyMeeting = (f, v) => { state.currentDailyLog.meeting[f] = v; };
+
+        window.openProjectModal = (e) => { 
+            const m = document.getElementById('project-modal');
+            if(e && state.currentProjectId) {
+                const p = state.currentProjectData;
+                document.getElementById('modal-project-id').value = p.id; document.getElementById('modal-project-name').value = p.name;
+                document.getElementById('modal-client-name').value = p.client; document.getElementById('modal-company-name').value = p.company;
+                document.getElementById('modal-start-date').value = p.startDate; document.getElementById('modal-status').value = p.status;
+                document.getElementById('modal-title').innerText = "Editar Obra";
+            } else { document.getElementById('modal-project-id').value = ""; document.getElementById('modal-title').innerText = "Nova Obra"; }
+            m.classList.add('modal-open');
+        };
+        window.closeProjectModal = () => document.getElementById('project-modal').classList.remove('modal-open');
+        window.handleProjectForm = async (e) => {
+            e.preventDefault(); const btn = document.getElementById('btn-save-project'); btn.innerHTML = '...'; btn.disabled = true;
+            const id = document.getElementById('modal-project-id').value;
+            const d = { name: document.getElementById('modal-project-name').value, client: document.getElementById('modal-client-name').value, company: document.getElementById('modal-company-name').value, startDate: document.getElementById('modal-start-date').value, status: document.getElementById('modal-status').value, companies: id?(state.currentProjectData?.companies||[]):[{id:1,name:'Própria'}], checklist: id?(state.currentProjectData?.checklist||[]):[] };
+            try {
+                if(id) await updateDoc(doc(db, `users/${state.user.uid}/projects/${id}`), d);
+                else await setDoc(doc(collection(db, `users/${state.user.uid}/projects`)), d);
+                window.closeProjectModal();
+            } catch(e) { alert("Erro ao salvar."); } finally { btn.innerHTML = 'Salvar Obra'; btn.disabled = false; }
+        };
+        window.deleteProject = async (id, e) => { e.stopPropagation(); if(confirm("Apagar?")) await deleteDoc(doc(db, `users/${state.user.uid}/projects/${id}`)); };
+
+        function renderApp(animate) {
+            const s = document.getElementById('sidebar'); const c = document.getElementById('content-area'); const m = document.getElementById('mobile-header');
+            if (state.view === 'auth') { s.classList.add('hidden'); m.classList.add('hidden'); c.innerHTML = generateAuthHTML(); }
+            else if (state.view === 'projectList') { s.classList.add('hidden'); m.classList.remove('hidden'); c.innerHTML = generateProjectListHTML(); }
+            else { s.classList.remove('hidden'); m.classList.remove('hidden'); renderProjectContent(animate); renderSidebar(); }
+        }
+        function renderSidebar() {
+            document.querySelectorAll('.nav-item').forEach(e => e.className = `nav-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-gray-600 hover:bg-blue-50`);
+            const b = document.getElementById(`nav-${state.activeTab}`); if(b) b.className = `nav-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors bg-blue-600 text-white shadow-md`;
+        }
+        function renderProjectContent(animate) {
+            const c = document.getElementById('content-area');
+            const scrollElement = document.querySelector('main');
+            const scrollPos = scrollElement ? scrollElement.scrollTop : 0;
+            const currentHeight = c.offsetHeight;
+            c.style.minHeight = `${currentHeight}px`;
+
+            if (state.activeTab === 'calendar') c.innerHTML = generateCalendarHTML();
+            else if (state.activeTab === 'daily') c.innerHTML = generateDailyLogHTML();
+            else if (state.activeTab === 'checklist') c.innerHTML = generateChecklistHTML();
+            else if (state.activeTab === 'companies') c.innerHTML = generateCompaniesHTML();
+            if (animate && c.firstChild) c.firstChild.classList.add('animate-fade-in');
+
+            setTimeout(() => { c.style.minHeight = ''; if (scrollElement) scrollElement.scrollTop = scrollPos; }, 0);
+        }
+
+        function createEmptyLog() { return { weather: 'sol', temperature: '', workforce: [], events: '', materials: [], photos: [], meeting: { hasMeeting: false } }; }
+        function getUniqueRoles() { const s = new Set(); Object.values(state.logsCache).forEach(l => l.workforce?.forEach(w => s.add(w.role))); return Array.from(s).map(r => `<option value="${r}">`).join(''); }
+
+        function generateAuthHTML() { return `<div class="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden animate-fade-in mx-auto my-auto mt-20"><div class="bg-blue-600 p-8 text-center"><h1 class="text-2xl font-bold text-white">ObraApp</h1></div><div class="p-8"><form onsubmit="window.handleAuth(event)" class="space-y-4"><input id="auth-email" class="w-full border rounded px-3 py-2" placeholder="Email"><input type="password" id="auth-password" class="w-full border rounded px-3 py-2" placeholder="Senha"><div id="auth-error" class="text-red-500 hidden"></div><button id="auth-btn" class="w-full bg-blue-600 text-white py-2 rounded">Entrar / Criar</button></form><div class="mt-4 text-center"><button onclick="window.toggleAuthMode()" class="text-blue-600">${state.authMode==='login'?'Criar Conta':'Login'}</button></div></div></div>`; }
+        function generateProjectListHTML() { return `<div class="max-w-6xl mx-auto"><div class="flex justify-between mb-6"><h1 class="text-2xl font-bold">Obras</h1><button onclick="window.openProjectModal()" class="bg-blue-600 text-white px-4 py-2 rounded">Nova Obra</button></div><div class="grid grid-cols-1 md:grid-cols-3 gap-6">${state.projects.map(p => `<div onclick="window.selectProject('${p.id}')" class="bg-white p-6 rounded shadow cursor-pointer hover:shadow-lg"><h3 class="font-bold text-lg">${p.name}</h3><p>${p.client}</p><span class="text-xs bg-gray-200 px-2 py-1 rounded">${p.status}</span></div>`).join('')}</div></div>`; }
+        function generateCalendarHTML() {
+            const p = state.currentProjectData; const y = state.calendarViewDate.getFullYear(); const m = state.calendarViewDate.getMonth();
+            const daysInM = new Date(y, m+1, 0).getDate(); const firstD = new Date(y, m, 1).getDay();
+            let dHTML = ''; for(let i=0;i<firstD;i++) dHTML+='<div></div>';
+            for(let d=1;d<=daysInM;d++) { const dt=`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`; const l=state.logsCache[dt]; const h=l&&(l.workforce?.length||l.events||l.materials?.length); dHTML+=`<button onclick="window.goToDate('${dt}')" class="calendar-day border rounded hover:border-blue-500 relative flex items-center justify-center bg-white ${dt===new Date().toISOString().split('T')[0]?'border-blue-500 text-blue-600 font-bold':''}">${d} ${h?'<span class="absolute bottom-1 w-1.5 h-1.5 bg-green-500 rounded-full"></span>':''}</button>`; }
+            return `<div class="max-w-4xl mx-auto"><div class="flex justify-between items-center mb-4"><h2 class="text-2xl font-bold">${p.name}</h2><button onclick="window.generateMonthlyReport()" class="bg-blue-100 text-blue-700 px-4 py-2 rounded">Relatório Mensal</button></div><div class="bg-white p-6 rounded shadow"><div class="flex justify-between mb-4"><button onclick="window.changeMonth(-1)"><</button><h3 class="font-bold">${y}-${m+1}</h3><button onclick="window.changeMonth(1)">></button></div><div class="calendar-grid mb-2 text-center text-gray-500">${['D','S','T','Q','Q','S','S'].map(x=>`<div>${x}</div>`).join('')}</div><div class="calendar-grid">${dHTML}</div></div></div>`;
+        }
+        function generateDailyLogHTML() {
+            const l = state.currentDailyLog; const da = !state.isEditing ? 'disabled' : ''; const hi = !state.isEditing ? 'hidden' : '';
+            return `<div class="max-w-4xl mx-auto space-y-6"><datalist id="roles-list">${getUniqueRoles()}</datalist>
+            <div class="flex justify-between items-center bg-white p-4 rounded shadow"><div class="flex gap-4 items-center"><button onclick="window.switchTab('calendar')"><i class="ph-bold ph-arrow-left"></i></button><h2 class="font-bold">Diário</h2><input type="date" value="${state.selectedDate}" onchange="window.changeDate(this.value)" class="border rounded p-1"></div><div class="flex gap-2"><button onclick="window.printDailyLog()" class="bg-gray-100 px-4 py-2 rounded">Baixar PDF</button>${state.isEditing ? `<button id="save-btn" onclick="window.persistCurrentLog()" class="bg-green-600 text-white px-4 py-2 rounded">Salvar</button>` : `<button onclick="window.enableEditMode()" class="bg-yellow-500 text-white px-4 py-2 rounded">Editar</button>`}</div></div>
+            <div class="bg-white p-6 rounded shadow"><h3 class="font-bold mb-4">Clima</h3><div class="flex gap-2">${['sol','nublado','chuva'].map(w=>`<button ${da} onclick="window.updateDailyLogData('weather','${w}')" class="px-4 py-2 border rounded capitalize ${l.weather===w?'bg-blue-600 text-white':''}">${w}</button>`).join('')}<input ${da} type="number" value="${l.temperature}" onchange="window.updateDailyLogData('temperature',this.value)" class="border rounded w-16 text-center" placeholder="°C"></div></div>
+            <div class="bg-white p-6 rounded shadow"><h3 class="font-bold mb-4">Efetivo</h3>${l.workforce.map((w,i)=>`<div class="flex gap-2 mb-2"><select ${da} class="border rounded p-2 flex-1" onchange="window.updateSubItem('workforce',${i},'company',this.value)"><option value="" disabled ${!w.company?'selected':''}>Empresa</option>${state.currentProjectData.companies?.map(c=>`<option value="${c.name}" ${w.company===c.name?'selected':''}>${c.name}</option>`).join('')}</select><input ${da} class="border rounded p-2 flex-1" list="roles-list" value="${w.role}" onchange="window.updateSubItem('workforce',${i},'role',this.value)" placeholder="Função"><input ${da} class="border rounded p-2 w-20" type="number" value="${w.count}" onchange="window.updateSubItem('workforce',${i},'count',this.value)"><button ${hi} onclick="window.removeSubItem('workforce',${i})" class="text-red-500"><i class="ph-bold ph-trash"></i></button></div>`).join('')}<button ${hi} onclick="window.addSubItem('workforce',{company:'',role:'',count:''})" class="text-blue-600">+ Adicionar</button></div>
+            <div class="bg-white p-6 rounded shadow"><h3 class="font-bold mb-4">Materiais</h3>${l.materials.map((m,i)=>`<div class="flex gap-2 mb-2"><input ${da} class="border rounded p-2 flex-1" value="${m.item}" onchange="window.updateSubItem('materials',${i},'item',this.value)"><input ${da} class="border rounded p-2 w-24" value="${m.quantity}" onchange="window.updateSubItem('materials',${i},'quantity',this.value)"><button ${hi} onclick="window.removeSubItem('materials',${i})" class="text-red-500"><i class="ph-bold ph-trash"></i></button></div>`).join('')}<button ${hi} onclick="window.addSubItem('materials',{item:'',quantity:''})" class="text-blue-600">+ Adicionar</button></div>
+            <div class="bg-white p-6 rounded shadow"><h3 class="font-bold mb-4">Ocorrências</h3><textarea ${da} class="w-full border rounded p-2 h-32" onchange="window.updateDailyLogData('events',this.value)">${l.events}</textarea></div>
+            <div class="bg-white p-6 rounded shadow"><h3 class="font-bold mb-4">Fotos</h3><div class="grid grid-cols-4 gap-4">${l.photos.map((p,i)=>`<div class="relative aspect-square bg-gray-100"><img src="${p.url}" class="w-full h-full object-cover"><button ${hi} onclick="window.removeSubItem('photos',${i})" class="absolute top-0 right-0 bg-red-500 text-white p-1">X</button><a href="${p.url}" target="_blank" class="absolute top-0 left-0 p-1 text-white bg-blue-600 rounded-br shadow-sm z-10" title="Baixar/Ver"><i class="ph-bold ph-arrow-square-out"></i></a><div class="absolute bottom-0 w-full bg-black/50 p-1"><input ${da} value="${p.caption}" onchange="window.updateSubItem('photos',${i},'caption',this.value)" class="w-full bg-transparent text-white text-xs outline-none border-none p-0"></div></div>`).join('')}<label class="${hi} border-2 border-dashed flex items-center justify-center cursor-pointer aspect-square">Add<input type="file" class="hidden" onchange="window.handlePhotoUpload(this)"></label></div></div>
+            
+            <div class="bg-white p-6 rounded shadow ${l.meeting.hasMeeting ? 'border-l-4 border-l-indigo-500' : ''}">
+                <div class="flex justify-between items-center mb-4"><h3 class="font-bold flex items-center"><i class="ph ph-users-three mr-2 text-indigo-500"></i> Ata de Reunião</h3><label class="relative inline-flex items-center cursor-pointer"><input ${da} type="checkbox" class="sr-only peer" ${l.meeting.hasMeeting ? 'checked' : ''} onchange="window.toggleDailyMeeting(this.checked)"><div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 peer-checked:bg-indigo-600"></div></label></div>
+                ${l.meeting.hasMeeting ? `<div class="space-y-4"><input ${da} type="text" value="${l.meeting.title}" onchange="window.updateDailyMeeting('title',this.value)" class="w-full border rounded p-2" placeholder="Título"><textarea ${da} onchange="window.updateDailyMeeting('content',this.value)" class="w-full h-32 border rounded p-2" placeholder="Conteúdo...">${l.meeting.content}</textarea>${l.meeting.pdfFile ? `<div class="flex items-center justify-between bg-indigo-50 p-3 rounded border border-indigo-100 text-sm text-indigo-800"><span><i class="ph-fill ph-file-pdf mr-2"></i> ${l.meeting.pdfName}</span><a href="${l.meeting.pdfFile}" target="_blank" class="bg-white border border-indigo-200 text-indigo-600 px-3 py-1 rounded hover:bg-indigo-100">Ver/Baixar</a></div>` : ''}</div>` : ''}
+            </div></div>`;
+        }
+        function generateChecklistHTML() { return `<div class="max-w-4xl mx-auto bg-white p-6 rounded shadow"><h2 class="font-bold mb-4">Checklist</h2><div class="flex gap-2 mb-4"><input id="new-todo" class="border rounded p-2 flex-1"><button onclick="window.addChecklist()" class="bg-blue-600 text-white px-4 rounded">Add</button></div>${state.currentProjectData.checklist.map(i=>`<div class="flex items-center gap-2 p-2 border-b"><button onclick="window.toggleChecklist(${i.id})">${i.completed?'✅':'⭕'}</button><span class="flex-1 ${i.completed?'line-through':''}">${i.text}</span><button onclick="window.deleteChecklistItem(${i.id})">🗑️</button></div>`).join('')}</div>`; }
+        function generateCompaniesHTML() { return `<div class="max-w-4xl mx-auto bg-white p-6 rounded shadow"><h2 class="font-bold mb-4">Empresas</h2><div class="flex gap-2 mb-4"><input id="new-company-name" class="border rounded p-2 flex-1"><button onclick="window.addCompany()" class="bg-blue-600 text-white px-4 rounded">Add</button></div>${state.currentProjectData.companies.map(c=>`<div class="flex justify-between p-2 border-b"><span>${c.name}</span><button onclick="window.deleteCompany(${c.id})">🗑️</button></div>`).join('')}</div>`; }
+
+        // --- PRINTING ---
+        window.printDailyLog = () => {
+            const p = state.currentProjectData; const l = state.currentDailyLog;
+            document.getElementById('print-container').innerHTML = `
+                <div style="font-family: sans-serif; padding: 40px;">
+                    <div style="border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; display: flex; justify-content: space-between;"><div><h1 style="margin:0; font-size: 24px;">${p.name}</h1><p style="margin:0; color: #666;">${p.client}</p></div><div style="text-align: right;"><p style="margin:0;">Diário de Obra</p><h2 style="margin:0;">${state.selectedDate}</h2></div></div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;"><div style="background: #f9f9f9; padding: 15px; border: 1px solid #ddd;"><strong>Clima:</strong> ${l.weather} ${l.temperature}°C</div><div style="background: #f9f9f9; padding: 15px; border: 1px solid #ddd;"><strong>Total Efetivo:</strong> ${l.workforce.reduce((a,c)=>a+(parseInt(c.count)||0),0)}</div></div>
+                    <h3>1. Efetivo</h3><table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;"><tr style="background: #eee;"><th style="padding: 8px; text-align: left;">Empresa</th><th style="padding: 8px; text-align: left;">Função</th><th style="padding: 8px; text-align: right;">Qtd</th></tr>${l.workforce.map(w=>`<tr><td style="padding: 8px; border-bottom: 1px solid #eee;">${w.company||'-'}</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${w.role}</td><td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${w.count}</td></tr>`).join('')}</table>
+                    <h3>2. Materiais</h3><table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;"><tr style="background: #eee;"><th style="padding: 8px; text-align: left;">Item</th><th style="padding: 8px; text-align: right;">Qtd</th></tr>${l.materials.map(m=>`<tr><td style="padding: 8px; border-bottom: 1px solid #eee;">${m.item}</td><td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${m.quantity}</td></tr>`).join('')}</table>
+                    <h3>3. Ocorrências</h3><div style="background: #f9f9f9; padding: 15px; border: 1px solid #ddd; min-height: 100px; white-space: pre-wrap;">${l.events||'Sem ocorrências.'}</div>
+                    ${l.photos.length ? `<h3>4. Fotos</h3><div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">${l.photos.map(x=>`<div><img src="${x.url}" style="width:100%; height: 200px; object-fit: cover;"><p>${x.caption}</p></div>`).join('')}</div>` : ''}
+                </div>`;
+            setTimeout(() => window.print(), 500);
+        };
+
+        window.generateMonthlyReport = () => {
+            const p = state.currentProjectData; const y = state.calendarViewDate.getFullYear(); const m = state.calendarViewDate.getMonth();
+            const prefix = `${y}-${String(m+1).padStart(2,'0')}`;
+            const logs = Object.keys(state.logsCache).filter(k=>k.startsWith(prefix)).sort().map(k=>({date:k,...state.logsCache[k]}));
+            if(!logs.length) { alert("Sem dados."); return; }
+            const totals = {}; let activeDays = 0;
+            logs.forEach(l => { if(l.workforce?.length) { activeDays++; l.workforce.forEach(w => totals[w.company||'Outros']=(totals[w.company||'Outros']||0)+parseInt(w.count||0)); }});
+            document.getElementById('print-container').innerHTML = `
+                <div style="font-family: sans-serif; padding: 40px;">
+                    <div style="border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px;"><h1 style="margin:0;">Relatório Mensal: ${m+1}/${y}</h1><p>${p.name}</p></div>
+                    <h3>Média de Efetivo (Dias ativos: ${activeDays})</h3>
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;"><tr style="background: #eee;"><th style="padding: 8px; text-align: left;">Empresa</th><th style="padding: 8px; text-align: right;">Média/Dia</th></tr>${Object.keys(totals).map(k=>`<tr><td style="padding: 8px; border-bottom: 1px solid #eee;">${k}</td><td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${(totals[k]/(activeDays||1)).toFixed(1)}</td></tr>`).join('')}</table>
+                    <h3>Resumo Diário</h3>${logs.map(l => `<div class="avoid-break" style="margin-bottom: 20px; border: 1px solid #ddd; padding: 10px;"><div style="font-weight: bold;">${l.date} - ${l.weather}</div><div style="font-size: 0.9em; color: #666; margin-bottom: 5px;">${l.events?.substring(0,150)||'Sem ocorrências'}...</div><div style="display: flex; gap: 10px;">${l.photos?.slice(0,2).map(ph=>`<img src="${ph.url}" style="width: 100px; height: 100px; object-fit: cover;">`).join('')||''}</div></div>`).join('')}
+                </div>`;
+            setTimeout(() => window.print(), 500);
+        };
+    </script>
+</body>
+</html>
