@@ -286,21 +286,87 @@
 
         window.removeSubItem = (arr, i) => { state.currentDailyLog[arr].splice(i, 1); renderProjectContent(false); };
 
+        // Helper: Image Compression
+        const compressImage = async (file) => {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const MAX_WIDTH = 1024;
+                        const MAX_HEIGHT = 1024;
+                        let width = img.width;
+                        let height = img.height;
+
+                        if (width > height) {
+                            if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+                        } else {
+                            if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+                        }
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        canvas.toBlob((blob) => {
+                            const newFile = new File([blob], file.name, { type: 'image/jpeg', lastModified: Date.now() });
+                            resolve(newFile);
+                        }, 'image/jpeg', 0.7);
+                    };
+                };
+            });
+        };
+
+        window.handlePhotoUpload = async (input) => {
+            if (input.files && input.files.length > 0) {
+                const container = input.parentElement;
+                const originalContent = container.innerHTML;
+                container.innerHTML = '<i class="ph ph-spinner animate-spin text-2xl text-blue-500"></i>';
+                
+                try {
+                    const files = Array.from(input.files);
+                    const uploadPromises = files.map(async (originalFile) => {
+                        const compressedFile = await compressImage(originalFile);
+                        const storageRef = ref(storage, `users/${state.user.uid}/projects/${state.currentProjectId}/photos/${Date.now()}_${originalFile.name}`);
+                        const snapshot = await uploadBytes(storageRef, compressedFile);
+                        const url = await getDownloadURL(snapshot.ref);
+                        return { url: url, caption: 'Foto', storagePath: snapshot.ref.fullPath };
+                    });
+
+                    const newPhotos = await Promise.all(uploadPromises);
+                    state.currentDailyLog.photos.push(...newPhotos);
+                    await persistLogInternal(); // Auto-save with URLs
+                    renderProjectContent(false);
+                } catch (error) {
+                    console.error("Erro upload:", error);
+                    alert("Erro ao enviar foto(s): " + error.message);
+                    container.innerHTML = originalContent;
+                }
+            }
+        };
+
+        window.handleDailyPdfUpload = (i) => uploadFile(i, 'docs');
+
+        async function persistLogInternal() {
+             const logRef = doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}/dailyLogs/${state.selectedDate}`);
+             await setDoc(logRef, state.currentDailyLog, { merge: true });
+        }
+
         async function uploadFile(input, pathType) {
             if (input.files[0]) {
                 const file = input.files[0];
                 const sRef = ref(storage, `users/${state.user.uid}/projects/${state.currentProjectId}/${pathType}/${Date.now()}_${file.name}`);
                 try {
                     const snap = await uploadBytes(sRef, file); const url = await getDownloadURL(snap.ref);
-                    if(pathType === 'photos') state.currentDailyLog.photos.push({ url, caption: 'Foto', storagePath: snap.ref.fullPath });
-                    else { state.currentDailyLog.meeting.pdfFile = url; state.currentDailyLog.meeting.pdfName = file.name; }
-                    await setDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}/dailyLogs/${state.selectedDate}`), state.currentDailyLog, { merge: true });
+                    // For single PDF
+                    state.currentDailyLog.meeting.pdfFile = url; state.currentDailyLog.meeting.pdfName = file.name;
+                    await persistLogInternal();
                     renderProjectContent(false);
                 } catch(e) { alert("Erro upload (Verifique regras Firebase): " + e.message); }
             }
         }
-        window.handlePhotoUpload = (i) => uploadFile(i, 'photos');
-        window.handleDailyPdfUpload = (i) => uploadFile(i, 'docs');
 
         window.addCompany = async () => { const v = document.getElementById('new-company-name').value; if(v) { await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { companies: arrayUnion({ id: Date.now(), name: v }) }); } };
         window.deleteCompany = async (id) => { 
@@ -309,10 +375,7 @@
                     const targetId = String(id);
                     const n = state.currentProjectData.companies.filter(c => String(c.id) !== targetId); 
                     await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { companies: n }); 
-                } catch (e) {
-                    console.error(e);
-                    alert("Erro ao apagar: " + e.message);
-                }
+                } catch (e) { console.error(e); alert("Erro ao apagar: " + e.message); }
             } 
         };
         
@@ -323,7 +386,7 @@
         window.toggleDailyMeeting = (c) => { state.currentDailyLog.meeting.hasMeeting = c; renderProjectContent(false); };
         window.updateDailyMeeting = (f, v) => { state.currentDailyLog.meeting[f] = v; };
 
-        // Função de copiar do dia anterior
+        // Copy workforce logic
         window.copyWorkforceFromPreviousDay = () => {
             const parts = state.selectedDate.split('-');
             const d = new Date(parts[0], parts[1] - 1, parts[2]); 
@@ -338,7 +401,6 @@
                 if (state.currentDailyLog.workforce.length > 0) {
                     if (!confirm('O efetivo atual será substituído pelo do dia anterior (' + new Date(prevDate).toLocaleDateString('pt-BR') + '). Continuar?')) return;
                 }
-                // Deep copy
                 state.currentDailyLog.workforce = prevLog.workforce.map(w => ({...w}));
                 renderProjectContent(false);
             } else {
@@ -514,9 +576,9 @@
 
             <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
                 <h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-camera text-blue-500"></i> Fotos</h3>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
                     ${l.photos.map((p,i)=>`<div class="relative aspect-square bg-gray-100 rounded-xl overflow-hidden border border-gray-200 shadow-sm"><img src="${p.url}" class="w-full h-full object-cover"><button ${hi} onclick="window.removeSubItem('photos',${i})" class="absolute top-1 right-1 bg-red-500/80 text-white p-1.5 rounded-full backdrop-blur-sm"><i class="ph-bold ph-x text-xs"></i></button><a href="${p.url}" target="_blank" class="absolute bottom-1 right-1 bg-blue-600/80 text-white p-1.5 rounded-full backdrop-blur-sm"><i class="ph-bold ph-download-simple text-xs"></i></a><div class="absolute bottom-0 w-full bg-black/60 p-1.5"><input ${da} value="${p.caption}" onchange="window.updateSubItem('photos',${i},'caption',this.value)" class="w-full bg-transparent text-white text-[10px] outline-none border-none p-0 text-center" placeholder="Legenda"></div></div>`).join('')}
-                    <label class="${hi} border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center cursor-pointer aspect-square bg-gray-50 hover:bg-gray-100"><i class="ph-bold ph-camera-plus text-2xl text-gray-400 mb-1"></i><span class="text-xs text-gray-500">Adicionar</span><input type="file" class="hidden" onchange="window.handlePhotoUpload(this)"></label>
+                    <label class="${hi} border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center cursor-pointer aspect-square bg-gray-50 hover:bg-gray-100"><i class="ph-bold ph-camera-plus text-2xl text-gray-400 mb-1"></i><span class="text-xs text-gray-500">Adicionar</span><input type="file" class="hidden" multiple accept="image/*" onchange="window.handlePhotoUpload(this)"></label>
                 </div>
             </div>
             
