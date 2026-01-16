@@ -254,7 +254,6 @@
             const c = state.logsCache[date];
             if (c) { 
                 state.currentDailyLog = JSON.parse(JSON.stringify(c)); 
-                // Migração de dados antigos para nova estrutura de clima, se necessário
                 if(!state.currentDailyLog.weatherMorning) state.currentDailyLog.weatherMorning = state.currentDailyLog.weather || 'sol';
                 if(!state.currentDailyLog.weatherAfternoon) state.currentDailyLog.weatherAfternoon = state.currentDailyLog.weather || 'sol';
                 state.isEditing = false; 
@@ -304,8 +303,6 @@
         window.handleDailyPdfUpload = (i) => uploadFile(i, 'docs');
 
         window.addCompany = async () => { const v = document.getElementById('new-company-name').value; if(v) { await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { companies: arrayUnion({ id: Date.now(), name: v }) }); } };
-        
-        // FIX: Delete company with try/catch and string comparison
         window.deleteCompany = async (id) => { 
             if(confirm('Tem certeza que deseja apagar esta empresa?')) { 
                 try {
@@ -325,6 +322,29 @@
 
         window.toggleDailyMeeting = (c) => { state.currentDailyLog.meeting.hasMeeting = c; renderProjectContent(false); };
         window.updateDailyMeeting = (f, v) => { state.currentDailyLog.meeting[f] = v; };
+
+        // Função de copiar do dia anterior
+        window.copyWorkforceFromPreviousDay = () => {
+            const parts = state.selectedDate.split('-');
+            const d = new Date(parts[0], parts[1] - 1, parts[2]); 
+            d.setDate(d.getDate() - 1);
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            const prevDate = `${y}-${m}-${day}`;
+            
+            const prevLog = state.logsCache[prevDate];
+            if (prevLog && prevLog.workforce && prevLog.workforce.length > 0) {
+                if (state.currentDailyLog.workforce.length > 0) {
+                    if (!confirm('O efetivo atual será substituído pelo do dia anterior (' + new Date(prevDate).toLocaleDateString('pt-BR') + '). Continuar?')) return;
+                }
+                // Deep copy
+                state.currentDailyLog.workforce = prevLog.workforce.map(w => ({...w}));
+                renderProjectContent(false);
+            } else {
+                alert('Não há registo de efetivo no dia ' + new Date(prevDate).toLocaleDateString('pt-BR'));
+            }
+        };
 
         window.openProjectModal = (e) => { 
             const m = document.getElementById('project-modal');
@@ -475,7 +495,10 @@
                     <span class="text-sm font-bold bg-purple-50 text-purple-700 px-3 py-1 rounded-full">Total: ${totalWorkforce}</span>
                 </div>
                 ${l.workforce.map(workforceRow).join('')}
-                <button ${hi} onclick="window.addSubItem('workforce',{company:'',role:'',count:''})" class="w-full py-3 border-2 border-dashed border-blue-200 text-blue-600 rounded-xl font-medium hover:bg-blue-50 mt-2">+ Adicionar Efetivo</button>
+                <div class="flex gap-2 mt-2 ${hi}">
+                    <button onclick="window.addSubItem('workforce',{company:'',role:'',count:''})" class="flex-1 py-3 border-2 border-dashed border-blue-200 text-blue-600 rounded-xl font-medium hover:bg-blue-50">+ Adicionar</button>
+                    <button onclick="window.copyWorkforceFromPreviousDay()" class="flex-1 py-3 border-2 border-dashed border-purple-200 text-purple-600 rounded-xl font-medium hover:bg-purple-50" title="Copiar do dia anterior"><i class="ph-bold ph-copy mr-2"></i>Repetir Anterior</button>
+                </div>
             </div>
 
             <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
