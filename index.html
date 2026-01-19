@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Gestor de Obras 2.0</title>
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- iOS Support & Icons -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="ObraApp">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3790/3790510.png">
+    <meta name="theme-color" content="#2563eb">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    </script>
+
+    <!-- CSS Personalizado -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body class="bg-slate-50 text-gray-800 font-sans h-screen flex flex-col md:flex-row overflow-hidden">
+
+    <div id="print-container"></div>
+
+    <div id="global-loader">
+        <i class="ph ph-spinner animate-spin text-4xl text-blue-600 mb-2"></i>
+        <p class="text-gray-500 font-medium text-sm">A iniciar...</p>
+    </div>
+
+    <!-- Mobile Header -->
+    <div id="mobile-header" class="md:hidden bg-white shadow-sm p-3 flex justify-between items-center sticky top-0 z-50 shrink-0 h-14">
+        <div class="flex items-center space-x-2">
+            <i class="ph-fill ph-hard-hat text-blue-600 text-xl"></i>
+            <span class="font-bold text-gray-800 text-lg">ObraApp</span>
+        </div>
+        <button onclick="window.toggleMobileMenu()" class="text-gray-600 p-2">
+            <i id="mobile-menu-icon" class="ph ph-list text-2xl"></i>
+        </button>
+    </div>
+
+    <!-- Sidebar Navigation (Desktop) / Mobile Drawer -->
+    <aside id="sidebar" class="fixed inset-y-0 left-0 z-40 w-72 bg-white shadow-2xl transform -translate-x-full transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:shadow-none border-r border-gray-200 flex flex-col z-50 hidden">
+        <div class="p-6 border-b border-gray-100 hidden md:flex items-center space-x-2 shrink-0">
+            <div class="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
+                <i class="ph-fill ph-hard-hat text-xl"></i>
+            </div>
+            <span class="text-xl font-bold tracking-tight text-gray-800">ObraApp</span>
+        </div>
+
+        <div class="px-4 py-3 bg-gray-50 border-b border-gray-100">
+            <button onclick="window.backToProjectList()" class="w-full flex items-center space-x-2 text-sm text-gray-600 hover:text-blue-600 font-medium">
+                <i class="ph-bold ph-caret-left"></i>
+                <span>Voltar às Obras</span>
+            </button>
+        </div>
+
+        <nav class="p-4 space-y-1 flex-1 overflow-y-auto">
+            <button onclick="window.switchTab('calendar')" id="nav-calendar" class="nav-item w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-colors text-gray-600 hover:bg-blue-50">
+                <i class="ph ph-calendar text-xl"></i>
+                <span class="font-medium">Calendário</span>
+            </button>
+            <button onclick="window.switchTab('checklist')" id="nav-checklist" class="nav-item w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-colors text-gray-600 hover:bg-blue-50">
+                <i class="ph ph-check-square text-xl"></i>
+                <span class="font-medium">Checklist</span>
+            </button>
+            <button onclick="window.switchTab('financial')" id="nav-financial" class="nav-item w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-colors text-gray-600 hover:bg-blue-50">
+                <i class="ph ph-currency-dollar text-xl"></i>
+                <span class="font-medium">Financeiro</span>
+            </button>
+            <button onclick="window.switchTab('companies')" id="nav-companies" class="nav-item w-full flex items-center space-x-3 px-4 py-3.5 rounded-xl transition-colors text-gray-600 hover:bg-blue-50">
+                <i class="ph ph-briefcase text-xl"></i>
+                <span class="font-medium">Cadastros</span>
+            </button>
+        </nav>
+
+        <div class="p-4 border-t border-gray-100 shrink-0 bg-gray-50 md:bg-white">
+            <button onclick="window.openProjectModal(true)" class="w-full mb-4 flex items-center justify-center space-x-2 bg-white md:bg-gray-100 border md:border-0 border-gray-200 text-gray-700 py-2.5 rounded-lg text-sm font-medium shadow-sm md:shadow-none">
+                <i class="ph ph-gear"></i>
+                <span>Configurar Obra</span>
+            </button>
+            
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3 text-sm text-gray-500 overflow-hidden">
+                    <div class="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0 text-gray-600">
+                        <i class="ph-bold ph-user"></i>
+                    </div>
+                    <div class="overflow-hidden">
+                        <p class="font-medium text-gray-700 truncate text-xs" id="user-email-display">Utilizador</p>
+                    </div>
+                </div>
+                <button onclick="window.handleLogout()" class="text-gray-400 hover:text-red-500 p-2" title="Sair">
+                    <i class="ph-bold ph-sign-out text-lg"></i>
+                </button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Overlay for mobile -->
+    <div id="mobile-overlay" onclick="window.toggleMobileMenu()" class="fixed inset-0 bg-black bg-opacity-50 z-40 hidden md:hidden glass-overlay"></div>
+
+    <!-- Modal Projeto -->
+    <div id="project-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 items-center justify-center p-4 modal">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 fade-in max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-6">
+                <h3 id="modal-title" class="text-xl font-bold text-gray-800">Nova Obra</h3>
+                <button onclick="window.closeProjectModal()" class="text-gray-400 p-2 rounded-full hover:bg-gray-100"><i class="ph ph-x text-xl"></i></button>
+            </div>
+            <form onsubmit="window.handleProjectForm(event)" class="space-y-4">
+                <input type="hidden" id="modal-project-id">
+                <div><label class="block text-xs font-bold text-gray-500 uppercase mb-1">Nome da Obra</label><input type="text" id="modal-project-name" required class="w-full border border-gray-300 rounded-lg px-3 py-2.5 outline-none focus:ring-2 focus:ring-blue-500"></div>
+                <div><label class="block text-xs font-bold text-gray-500 uppercase mb-1">Cliente</label><input type="text" id="modal-client-name" required class="w-full border border-gray-300 rounded-lg px-3 py-2.5 outline-none focus:ring-2 focus:ring-blue-500"></div>
+                <div><label class="block text-xs font-bold text-gray-500 uppercase mb-1">Construtora</label><input type="text" id="modal-company-name" required class="w-full border border-gray-300 rounded-lg px-3 py-2.5 outline-none focus:ring-2 focus:ring-blue-500"></div>
+                <div class="flex gap-2">
+                    <div class="flex-1"><label class="block text-xs font-bold text-gray-500 uppercase mb-1">Início</label><input type="date" id="modal-start-date" required class="w-full border border-gray-300 rounded-lg px-3 py-2.5 outline-none focus:ring-2 focus:ring-blue-500"></div>
+                    <div class="flex-1"><label class="block text-xs font-bold text-gray-500 uppercase mb-1">Entrega</label><input type="date" id="modal-delivery-date" class="w-full border border-gray-300 rounded-lg px-3 py-2.5 outline-none focus:ring-2 focus:ring-blue-500"></div>
+                </div>
+                <div><label class="block text-xs font-bold text-gray-500 uppercase mb-1">Status</label><select id="modal-status" class="w-full border border-gray-300 rounded-lg px-3 py-2.5 outline-none focus:ring-2 focus:ring-blue-500 bg-white"><option value="Em Andamento">Em Andamento</option><option value="Atrasado">Atrasado</option><option value="Concluído">Concluído</option><option value="Paralisado">Paralisado</option></select></div>
+                <div class="pt-4"><button type="submit" id="btn-save-project" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition flex justify-center shadow-lg">Salvar Obra</button></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 overflow-y-auto bg-slate-50 relative w-full h-full touch-pan-y">
+        <div id="content-area" class="p-3 md:p-8 max-w-5xl mx-auto pb-24 md:pb-10 no-print"></div>
+    </main>
+
+    <!-- FIREBASE MODULE -->
+    <script type="module" src="script.js"></script>
+</body>
+</html>
