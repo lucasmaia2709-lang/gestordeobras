@@ -1,0 +1,946 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, deleteDoc, onSnapshot, query, where, updateDoc, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+import { getStorage, ref, uploadBytes, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+
+// SW Check
+if ('serviceWorker' in navigator && (window.location.protocol.indexOf('http') === 0)) {
+    navigator.serviceWorker.register('./sw.js').catch(e => console.log('SW fail:', e));
+}
+
+const firebaseConfig = {
+    apiKey: "AIzaSyB4lYMnm7e01XjoXVD1w2z_6eWqtQRZ2JY",
+    authDomain: "gestorde-obras.firebaseapp.com",
+    projectId: "gestorde-obras",
+    storageBucket: "gestorde-obras.firebasestorage.app",
+    messagingSenderId: "1087144807634",
+    appId: "1:1087144807634:web:30cbf8ad83a33d7e7b710b",
+    measurementId: "G-MW6FVJFDW5"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const storage = getStorage(app);
+const auth = getAuth(app);
+
+let state = {
+    user: null, view: 'auth', authMode: 'login', currentProjectId: null, currentProjectData: null, activeTab: 'calendar',
+    isMobileMenuOpen: false, selectedDate: new Date().toISOString().split('T')[0], calendarViewDate: new Date(),
+    projects: [], logsCache: {}, currentDailyLog: null, isEditing: true, 
+    financialConfigMode: false, tempFinancial: [], editingFinancialId: null // Added editingFinancialId
+};
+
+onAuthStateChanged(auth, (user) => {
+    const loader = document.getElementById('global-loader');
+    if (user) { state.user = user; document.getElementById('user-email-display').textContent = user.email; initApp(); } 
+    else { state.user = null; state.view = 'auth'; state.projects = []; if(loader) loader.style.display = 'none'; renderApp(); }
+});
+
+function initApp() {
+    const q = query(collection(db, `users/${state.user.uid}/projects`));
+    onSnapshot(q, (snapshot) => {
+        state.projects = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (state.currentProjectId) state.currentProjectData = state.projects.find(p => p.id === state.currentProjectId);
+        if (state.view === 'auth') state.view = 'projectList';
+        document.getElementById('global-loader').style.display = 'none';
+        renderApp(false); 
+    }, (error) => { console.error(error); document.getElementById('global-loader').style.display = 'none'; });
+}
+
+window.toggleAuthMode = () => { state.authMode = state.authMode === 'login' ? 'register' : 'login'; renderApp(true); };
+window.handleAuth = async (e) => {
+    e.preventDefault(); const email = document.getElementById('auth-email').value; const password = document.getElementById('auth-password').value;
+    const btn = document.getElementById('auth-btn'); const err = document.getElementById('auth-error');
+    if (password.length < 6) { err.innerHTML = 'Senha min 6 chars.'; err.classList.remove('hidden'); return; }
+    btn.disabled = true; btn.innerHTML = '...'; err.classList.add('hidden');
+    try {
+        if (state.authMode === 'register') await createUserWithEmailAndPassword(auth, email, password);
+        else await signInWithEmailAndPassword(auth, email, password);
+    } catch (e) { btn.disabled = false; btn.innerText = 'Tentar Novamente'; err.textContent = e.message; err.classList.remove('hidden'); }
+};
+window.handleLogout = async () => { try { await signOut(auth); } catch (e) {} };
+window.toggleMobileMenu = () => { state.isMobileMenuOpen = !state.isMobileMenuOpen; const s = document.getElementById('sidebar'); if(state.isMobileMenuOpen) s.classList.remove('-translate-x-full','hidden'); else s.classList.add('-translate-x-full','hidden'); };
+window.switchTab = (t) => { state.activeTab = t; if (state.isMobileMenuOpen) window.toggleMobileMenu(); renderApp(true); };
+window.backToProjectList = () => { state.currentProjectId = null; state.view = 'projectList'; renderApp(true); };
+
+window.selectProject = async (id) => {
+    state.currentProjectId = id; state.currentProjectData = state.projects.find(p => p.id === id); state.view = 'projectDetails'; state.activeTab = 'calendar';
+    onSnapshot(collection(db, `users/${state.user.uid}/projects/${id}/dailyLogs`), (s) => {
+        state.logsCache = {}; s.docs.forEach(d => state.logsCache[d.id] = d.data()); renderApp(false);
+    });
+    await window.loadDailyLogForDate(state.selectedDate); renderApp(true);
+};
+
+window.changeDate = async (v) => { state.selectedDate = v; await window.loadDailyLogForDate(v); renderApp(false); };
+window.goToDate = async (d) => { state.selectedDate = d; await window.loadDailyLogForDate(d); window.switchTab('daily'); };
+window.changeMonth = (o) => { state.calendarViewDate.setMonth(state.calendarViewDate.getMonth() + o); renderApp(false); };
+
+window.loadDailyLogForDate = async (date) => {
+    if(!state.currentProjectId) return;
+    const c = state.logsCache[date];
+    if (c) { 
+        state.currentDailyLog = JSON.parse(JSON.stringify(c)); 
+        if(!state.currentDailyLog.weatherMorning) state.currentDailyLog.weatherMorning = state.currentDailyLog.weather || 'sol';
+        if(!state.currentDailyLog.weatherAfternoon) state.currentDailyLog.weatherAfternoon = state.currentDailyLog.weather || 'sol';
+        if(!state.currentDailyLog.eventPhotos) state.currentDailyLog.eventPhotos = [];
+        if(!state.currentDailyLog.materialPhotos) state.currentDailyLog.materialPhotos = [];
+        state.isEditing = false; 
+    } else { 
+        state.currentDailyLog = createEmptyLog(); state.isEditing = true; 
+    }
+};
+
+window.enableEditMode = () => { state.isEditing = true; renderProjectContent(false); };
+
+window.persistCurrentLog = async () => {
+    if(!state.currentProjectId) return;
+    const btn = document.getElementById('save-btn'); const old = btn.innerHTML; btn.innerHTML = '...'; btn.disabled = true;
+    try {
+        await setDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}/dailyLogs/${state.selectedDate}`), state.currentDailyLog, { merge: true });
+        state.isEditing = false; btn.innerHTML = 'Salvo!'; setTimeout(() => renderProjectContent(false), 800);
+    } catch (e) { alert("Erro ao salvar."); btn.innerHTML = old; btn.disabled = false; }
+};
+
+window.updateDailyLogData = (f, v) => { state.currentDailyLog[f] = v; if(f.startsWith('weather')) renderProjectContent(false); };
+window.updateSubItem = (arr, i, f, v) => { state.currentDailyLog[arr][i][f] = v; };
+
+window.addSubItem = (arr, obj) => {
+    state.currentDailyLog[arr].push(obj);
+    const cont = document.getElementById('content-area'); const main = document.querySelector('main');
+    const scroll = main ? main.scrollTop : 0; const h = cont.offsetHeight; cont.style.minHeight = h + 'px';
+    renderProjectContent(false);
+    setTimeout(() => { cont.style.minHeight = ''; if(main) main.scrollTop = scroll; }, 0);
+};
+
+window.removeSubItem = (arr, i) => { state.currentDailyLog[arr].splice(i, 1); renderProjectContent(false); };
+
+// Helper: Image Compression
+const compressImage = async (file) => {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = (event) => {
+            const img = new Image();
+            img.src = event.target.result;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                const MAX_WIDTH = 1024;
+                const MAX_HEIGHT = 1024;
+                let width = img.width;
+                let height = img.height;
+
+                if (width > height) {
+                    if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+                } else {
+                    if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+                }
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+                canvas.toBlob((blob) => {
+                    const newFile = new File([blob], file.name, { type: 'image/jpeg', lastModified: Date.now() });
+                    resolve(newFile);
+                }, 'image/jpeg', 0.7);
+            };
+        };
+    });
+};
+
+// Updated Photo Upload to support multiple buckets (Photos, Event Photos, Material Photos)
+window.handlePhotoUpload = async (input, targetArray = 'photos') => {
+    if (input.files && input.files.length > 0) {
+        const container = input.parentElement;
+        const originalContent = container.innerHTML;
+        container.innerHTML = '<i class="ph ph-spinner animate-spin text-2xl text-blue-500"></i>';
+        
+        try {
+            const files = Array.from(input.files);
+            const uploadPromises = files.map(async (originalFile) => {
+                const compressedFile = await compressImage(originalFile);
+                const storageRef = ref(storage, `users/${state.user.uid}/projects/${state.currentProjectId}/${targetArray}/${Date.now()}_${originalFile.name}`);
+                const snapshot = await uploadBytes(storageRef, compressedFile);
+                const url = await getDownloadURL(snapshot.ref);
+                return { url: url, caption: 'Foto', storagePath: snapshot.ref.fullPath };
+            });
+
+            const newPhotos = await Promise.all(uploadPromises);
+            if(!state.currentDailyLog[targetArray]) state.currentDailyLog[targetArray] = [];
+            state.currentDailyLog[targetArray].push(...newPhotos);
+            
+            const logRef = doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}/dailyLogs/${state.selectedDate}`);
+            await setDoc(logRef, state.currentDailyLog, { merge: true });
+            
+            renderProjectContent(false);
+        } catch (error) {
+            console.error("Erro upload:", error);
+            alert("Erro ao enviar foto(s): " + error.message);
+            container.innerHTML = originalContent;
+        }
+    }
+};
+
+window.handleDailyPdfUpload = (i) => uploadFile(i, 'docs');
+
+async function uploadFile(input, pathType) {
+    if (input.files[0]) {
+        const file = input.files[0];
+        const sRef = ref(storage, `users/${state.user.uid}/projects/${state.currentProjectId}/${pathType}/${Date.now()}_${file.name}`);
+        try {
+            const snap = await uploadBytes(sRef, file); const url = await getDownloadURL(snap.ref);
+            // For single PDF
+            state.currentDailyLog.meeting.pdfFile = url; state.currentDailyLog.meeting.pdfName = file.name;
+            const logRef = doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}/dailyLogs/${state.selectedDate}`);
+            await setDoc(logRef, state.currentDailyLog, { merge: true });
+            renderProjectContent(false);
+        } catch(e) { alert("Erro upload (Verifique regras Firebase): " + e.message); }
+    }
+}
+
+window.addCompany = async () => { const v = document.getElementById('new-company-name').value; if(v) { await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { companies: arrayUnion({ id: Date.now(), name: v }) }); } };
+window.deleteCompany = async (id) => { 
+    if(confirm('Tem certeza que deseja apagar esta empresa?')) { 
+        try {
+            const targetId = String(id);
+            const n = state.currentProjectData.companies.filter(c => String(c.id) !== targetId); 
+            await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { companies: n }); 
+        } catch (e) { console.error(e); alert("Erro ao apagar: " + e.message); }
+    } 
+};
+
+window.addChecklist = async () => { const v = document.getElementById('new-todo').value; if(v) { await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { checklist: arrayUnion({ id: Date.now(), text: v, completed: false }) }); } };
+window.toggleChecklist = async (id) => { const n = state.currentProjectData.checklist.map(i => i.id === id ? { ...i, completed: !i.completed } : i); await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { checklist: n }); };
+window.deleteChecklistItem = async (id) => { const n = state.currentProjectData.checklist.filter(i => i.id !== id); await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { checklist: n }); };
+
+window.toggleDailyMeeting = (c) => { state.currentDailyLog.meeting.hasMeeting = c; renderProjectContent(false); };
+window.updateDailyMeeting = (f, v) => { state.currentDailyLog.meeting[f] = v; };
+
+// --- NEW FINANCIAL LOGIC (Bulk) ---
+
+window.toggleFinancialConfig = () => { 
+    state.financialConfigMode = !state.financialConfigMode; 
+    // When entering config mode, clone existing to temp
+    if(state.financialConfigMode) {
+        state.tempFinancial = JSON.parse(JSON.stringify(state.currentProjectData.financial || []));
+    }
+    renderProjectContent(false); 
+};
+
+window.generateFinancialGrid = () => {
+    const startStr = document.getElementById('fin-start-month').value;
+    const endStr = document.getElementById('fin-end-month').value;
+
+    if(!startStr || !endStr) { alert("Selecione mês inicial e final."); return; }
+    if(startStr > endStr) { alert("O mês inicial deve ser anterior ao final."); return; }
+
+    const start = new Date(startStr + "-01");
+    const end = new Date(endStr + "-01");
+    
+    // Map existing months for easy lookup to preserve values
+    const existingMap = {};
+    state.tempFinancial.forEach(f => existingMap[f.month] = f);
+
+    const newTemp = [];
+    let current = new Date(start);
+
+    // Iterate through months
+    while(current <= end) {
+        const y = current.getFullYear();
+        const m = String(current.getMonth() + 1).padStart(2,'0');
+        const monthStr = `${y}-${m}`;
+
+        if(existingMap[monthStr]) {
+            newTemp.push(existingMap[monthStr]); // Keep existing
+        } else {
+            newTemp.push({ id: Date.now() + newTemp.length, month: monthStr, planned: 0, measured: 0 }); // Create new
+        }
+        current.setMonth(current.getMonth() + 1);
+    }
+    
+    state.tempFinancial = newTemp;
+    renderProjectContent(false);
+};
+
+window.updateTempFinancial = (id, field, value) => {
+    state.tempFinancial = state.tempFinancial.map(f => f.id === id ? { ...f, [field]: parseFloat(value) || 0 } : f);
+};
+
+window.saveFinancialConfig = async () => {
+    const btn = document.getElementById('btn-save-financial');
+    if(btn) { btn.innerHTML = 'Salvando...'; btn.disabled = true; }
+    
+    try {
+        await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { financial: state.tempFinancial });
+        state.financialConfigMode = false;
+        renderProjectContent(false);
+    } catch (e) {
+        alert("Erro ao salvar: " + e.message);
+        if(btn) { btn.innerHTML = 'Salvar Cronograma'; btn.disabled = false; }
+    }
+};
+
+// NEW: Click-to-edit functions for Financial Table
+window.startEditingFinancial = (id) => {
+    state.editingFinancialId = id;
+    renderProjectContent(false);
+    // Focus on the input after render
+    setTimeout(() => {
+        const el = document.getElementById(`fin-input-${id}`);
+        if(el) {
+            el.focus();
+            el.select();
+        }
+    }, 50);
+};
+
+window.stopEditingFinancial = async (id, val) => {
+    const numericVal = parseFloat(val);
+    if (!isNaN(numericVal) || val === '') {
+            const currentFinancial = state.currentProjectData.financial || [];
+            const newList = currentFinancial.map(i => i.id === id ? { ...i, measured: val === '' ? 0 : numericVal } : i);
+            // Optimistic update
+            state.currentProjectData.financial = newList;
+            // Async save
+            await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { financial: newList });
+    }
+    state.editingFinancialId = null;
+    renderProjectContent(false);
+};
+
+window.copyWorkforceFromPreviousDay = () => {
+    const parts = state.selectedDate.split('-');
+    const d = new Date(parts[0], parts[1] - 1, parts[2]); 
+    d.setDate(d.getDate() - 1);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const prevDate = `${y}-${m}-${day}`;
+    
+    const prevLog = state.logsCache[prevDate];
+    if (prevLog && prevLog.workforce && prevLog.workforce.length > 0) {
+        if (state.currentDailyLog.workforce.length > 0) {
+            if (!confirm('O efetivo atual será substituído pelo do dia anterior (' + new Date(prevDate).toLocaleDateString('pt-BR') + '). Continuar?')) return;
+        }
+        state.currentDailyLog.workforce = prevLog.workforce.map(w => ({...w}));
+        renderProjectContent(false);
+    } else {
+        alert('Não há registo de efetivo no dia ' + new Date(prevDate).toLocaleDateString('pt-BR'));
+    }
+};
+
+window.openProjectModal = (e) => { 
+    const m = document.getElementById('project-modal');
+    if(e && state.currentProjectId) {
+        const p = state.currentProjectData;
+        document.getElementById('modal-project-id').value = p.id; document.getElementById('modal-project-name').value = p.name;
+        document.getElementById('modal-client-name').value = p.client; document.getElementById('modal-company-name').value = p.company;
+        document.getElementById('modal-start-date').value = p.startDate; 
+        document.getElementById('modal-delivery-date').value = p.deliveryDate || '';
+        document.getElementById('modal-status').value = p.status;
+        document.getElementById('modal-title').innerText = "Editar Obra";
+    } else { 
+        document.getElementById('modal-project-id').value = ""; document.getElementById('modal-title').innerText = "Nova Obra"; 
+        document.getElementById('modal-project-name').value = ""; document.getElementById('modal-client-name').value = "";
+        document.getElementById('modal-company-name').value = ""; document.getElementById('modal-start-date').value = "";
+        document.getElementById('modal-delivery-date').value = "";
+    }
+    m.classList.add('modal-open');
+};
+window.closeProjectModal = () => document.getElementById('project-modal').classList.remove('modal-open');
+window.handleProjectForm = async (e) => {
+    e.preventDefault(); const btn = document.getElementById('btn-save-project'); btn.innerHTML = '...'; btn.disabled = true;
+    const id = document.getElementById('modal-project-id').value;
+    const d = { 
+        name: document.getElementById('modal-project-name').value, 
+        client: document.getElementById('modal-client-name').value, 
+        company: document.getElementById('modal-company-name').value, 
+        startDate: document.getElementById('modal-start-date').value, 
+        deliveryDate: document.getElementById('modal-delivery-date').value,
+        status: document.getElementById('modal-status').value, 
+        companies: id?(state.currentProjectData?.companies||[]):[{id:1,name:'Própria'}], 
+        checklist: id?(state.currentProjectData?.checklist||[]):[],
+        financial: id?(state.currentProjectData?.financial||[]):[]
+    };
+    try {
+        if(id) await updateDoc(doc(db, `users/${state.user.uid}/projects/${id}`), d);
+        else await setDoc(doc(collection(db, `users/${state.user.uid}/projects`)), d);
+        window.closeProjectModal();
+    } catch(e) { alert("Erro ao salvar."); } finally { btn.innerHTML = 'Salvar Obra'; btn.disabled = false; }
+};
+window.deleteProject = async (id, e) => { e.stopPropagation(); if(confirm("Apagar?")) await deleteDoc(doc(db, `users/${state.user.uid}/projects/${id}`)); };
+
+function renderApp(animate) {
+    const s = document.getElementById('sidebar'); const c = document.getElementById('content-area'); const m = document.getElementById('mobile-header');
+    if (state.view === 'auth') { s.classList.add('hidden'); m.classList.add('hidden'); c.innerHTML = generateAuthHTML(); }
+    else if (state.view === 'projectList') { s.classList.add('hidden'); m.classList.remove('hidden'); c.innerHTML = generateProjectListHTML(); }
+    else { s.classList.remove('hidden'); m.classList.remove('hidden'); renderProjectContent(animate); renderSidebar(); }
+}
+function renderSidebar() {
+    document.querySelectorAll('.nav-item').forEach(e => e.className = `nav-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors text-gray-600 hover:bg-blue-50`);
+    const b = document.getElementById(`nav-${state.activeTab}`); if(b) b.className = `nav-item w-full flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors bg-blue-600 text-white shadow-md`;
+}
+function renderProjectContent(animate) {
+    const c = document.getElementById('content-area');
+    const scrollElement = document.querySelector('main');
+    const scrollPos = scrollElement ? scrollElement.scrollTop : 0;
+    const currentHeight = c.offsetHeight;
+    c.style.minHeight = `${currentHeight}px`;
+
+    if (state.activeTab === 'calendar') c.innerHTML = generateCalendarHTML();
+    else if (state.activeTab === 'daily') c.innerHTML = generateDailyLogHTML();
+    else if (state.activeTab === 'checklist') c.innerHTML = generateChecklistHTML();
+    else if (state.activeTab === 'companies') c.innerHTML = generateCompaniesHTML();
+    else if (state.activeTab === 'financial') c.innerHTML = generateFinancialHTML();
+    else if (state.activeTab === 'report') c.innerHTML = generateReportPreviewHTML();
+    
+    // FIX: Use firstElementChild to avoid text nodes (whitespace) causing undefined errors
+    if (animate && c.firstElementChild) c.firstElementChild.classList.add('animate-fade-in');
+
+    setTimeout(() => { c.style.minHeight = ''; if (scrollElement) scrollElement.scrollTop = scrollPos; }, 0);
+}
+
+function createEmptyLog() { 
+    return { 
+        weatherMorning: 'sol', weatherAfternoon: 'sol', 
+        temperature: '', workforce: [], events: '', materials: [], photos: [], 
+        eventPhotos: [], materialPhotos: [],
+        meeting: { hasMeeting: false } 
+    }; 
+}
+function getUniqueRoles() { const s = new Set(); Object.values(state.logsCache).forEach(l => l.workforce?.forEach(w => s.add(w.role))); return Array.from(s).map(r => `<option value="${r}">`).join(''); }
+
+function generateAuthHTML() { return `<div class="w-full max-w-sm bg-white rounded-2xl shadow-xl overflow-hidden animate-fade-in mx-auto my-auto mt-10 md:mt-20"><div class="bg-blue-600 p-8 text-center"><h1 class="text-2xl font-bold text-white">ObraApp</h1></div><div class="p-6"><form onsubmit="window.handleAuth(event)" class="space-y-4"><input id="auth-email" class="w-full border rounded-lg px-4 py-3 bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500" placeholder="Email"><input type="password" id="auth-password" class="w-full border rounded-lg px-4 py-3 bg-gray-50 outline-none focus:ring-2 focus:ring-blue-500" placeholder="Senha"><div id="auth-error" class="text-red-500 text-sm hidden bg-red-50 p-2 rounded"></div><button id="auth-btn" class="w-full bg-blue-600 text-white py-3 rounded-lg font-bold shadow-md">Entrar / Criar</button></form><div class="mt-6 text-center"><button onclick="window.toggleAuthMode()" class="text-blue-600 font-medium">${state.authMode==='login'?'Criar Nova Conta':'Fazer Login'}</button></div></div></div>`; }
+function generateProjectListHTML() { return `<div class="max-w-6xl mx-auto w-full"><div class="flex justify-between items-center mb-6 px-2"><div><h1 class="text-2xl font-bold text-gray-800">Obras</h1><p class="text-gray-500 text-sm">Selecione para gerir</p></div><button onclick="window.openProjectModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold shadow-sm flex items-center"><i class="ph-bold ph-plus mr-1"></i> Nova</button></div><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 px-2">${state.projects.map(p => `<div onclick="window.selectProject('${p.id}')" class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 cursor-pointer active:scale-95 transition-transform"><div class="flex justify-between mb-2"><span class="font-bold text-lg text-gray-800">${p.name}</span><span class="text-xs bg-blue-50 text-blue-700 px-2 py-1 rounded-full h-fit">${p.status}</span></div><p class="text-gray-500 text-sm mb-3">${p.client}</p><div class="flex justify-between items-center text-xs text-gray-400 border-t pt-3"><span><i class="ph-fill ph-calendar mr-1"></i>${p.startDate}</span><button onclick="window.deleteProject('${p.id}', event)" class="p-2 text-gray-300 hover:text-red-500"><i class="ph-bold ph-trash text-lg"></i></button></div></div>`).join('')}</div></div>`; }
+
+function generateCalendarHTML() {
+    const p = state.currentProjectData; const y = state.calendarViewDate.getFullYear(); const m = state.calendarViewDate.getMonth();
+    const daysInM = new Date(y, m+1, 0).getDate(); const firstD = new Date(y, m, 1).getDay();
+    let dHTML = ''; for(let i=0;i<firstD;i++) dHTML+='<div></div>';
+    
+    // Format Month string like "Janeiro/2026"
+    const monthName = state.calendarViewDate.toLocaleString('pt-PT', { month: 'long' });
+    const monthLabel = `${monthName.charAt(0).toUpperCase() + monthName.slice(1)}/${y}`;
+
+    // --- NOVO CÁLCULO DE PROGRESSO FINANCEIRO ---
+    let progress = 0;
+    let realProgress = 0; // Nova variável para o progresso real
+    let deviationHTML = '';
+    
+    const financial = p.financial || [];
+    
+    if (financial.length > 0 && p.startDate) {
+        // Ordenar cronologicamente
+        financial.sort((a,b) => a.month.localeCompare(b.month));
+
+        // 1. Encontrar o último mês com medição real (measured > 0)
+        let lastMeasuredIndex = -1;
+        for (let i = financial.length - 1; i >= 0; i--) {
+            if (financial[i].measured && financial[i].measured > 0) {
+                lastMeasuredIndex = i;
+                break;
+            }
+        }
+
+        if (lastMeasuredIndex !== -1) {
+            const lastMeasuredMonthStr = financial[lastMeasuredIndex].month; // "YYYY-MM"
+            
+            // Totais para cálculo
+            const projectTotalPlanned = financial.reduce((acc, curr) => acc + (curr.planned || 0), 0);
+            let accPlannedAtMeasurement = 0;
+            let accRealAtMeasurement = 0;
+            
+            for (let i = 0; i <= lastMeasuredIndex; i++) {
+                accPlannedAtMeasurement += (financial[i].planned || 0);
+                accRealAtMeasurement += (financial[i].measured || 0);
+            }
+
+            // A) Andamento Previsto (%)
+            if (projectTotalPlanned > 0) {
+                progress = (accPlannedAtMeasurement / projectTotalPlanned) * 100;
+                realProgress = (accRealAtMeasurement / projectTotalPlanned) * 100; // Cálculo Porcentagem Real
+            }
+
+            // B) Cálculo de Desvio em Dias
+            const startDate = new Date(p.startDate);
+            // Data final do mês da medição (ano, mês base 0 + 1 = próximo mês, dia 0 = último dia do mês atual)
+            const [mYear, mMonth] = lastMeasuredMonthStr.split('-');
+            const measurementDate = new Date(parseInt(mYear), parseInt(mMonth), 0); 
+            
+            const timeDiff = measurementDate - startDate;
+            // Dias totais decorridos até ao fim do mês de medição
+            const totalDaysElapsed = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
+
+            if (totalDaysElapsed > 0 && accPlannedAtMeasurement > 0) {
+                // Valor diário previsto = Planeado Acumulado / Dias Decorridos
+                const dailyPlannedValue = accPlannedAtMeasurement / totalDaysElapsed;
+                
+                // Dias Teóricos (baseado no valor real) = Real Acumulado / Valor Diário
+                const theoreticalDays = accRealAtMeasurement / dailyPlannedValue;
+                
+                // Desvio = Dias Decorridos - Dias Teóricos
+                const diff = totalDaysElapsed - theoreticalDays;
+                const isLate = diff > 0;
+                const diffAbs = Math.abs(Math.round(diff));
+                
+                const colorClass = isLate ? 'text-red-600' : 'text-green-600';
+                const icon = isLate ? 'ph-trend-down' : 'ph-trend-up';
+                const label = isLate ? 'de Atraso' : 'de Adiantamento';
+                
+                deviationHTML = `<div class="mt-2 text-xs font-bold ${colorClass} flex items-center justify-end gap-1 animate-fade-in">
+                    <i class="ph-bold ${icon}"></i>
+                    <span>${diffAbs} dias ${label} (Real)</span>
+                </div>`;
+            }
+        }
+    }
+
+    for(let d=1;d<=daysInM;d++) { 
+        const dt=`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`; 
+        const l=state.logsCache[dt]; 
+        const h=l&&(l.workforce?.length||l.events||l.materials?.length); 
+        dHTML+=`<button onclick="window.goToDate('${dt}')" class="calendar-day border border-gray-100 rounded-lg active:bg-blue-50 relative flex flex-col items-center justify-center bg-white ${dt===new Date().toISOString().split('T')[0]?'border-blue-500 text-blue-600 font-bold ring-1 ring-blue-500':''} shadow-sm transition-colors hover:bg-gray-50">
+            <span class="text-lg">${d}</span>
+            ${h?'<span class="mt-1 w-1.5 h-1.5 bg-green-500 rounded-full"></span>':''}
+        </button>`; 
+    }
+
+    return `<div class="max-w-4xl mx-auto w-full">
+        <div class="flex flex-col gap-4 mb-4">
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                <div class="flex justify-between items-start mb-3">
+                    <div>
+                        <h2 class="text-xl font-bold text-gray-800">${p.name}</h2>
+                        <p class="text-xs text-gray-500">${p.client} | Entrega: ${p.deliveryDate ? new Date(p.deliveryDate).toLocaleDateString('pt-PT') : 'N/D'}</p>
+                    </div>
+                </div>
+                <div class="w-full bg-gray-100 rounded-full h-2.5 mb-1 overflow-hidden">
+                    <div class="bg-blue-600 h-2.5 rounded-full progress-striped animate-fade-in" style="width: ${progress.toFixed(0)}%"></div>
+                </div>
+                <div class="flex justify-between items-center">
+                    <div class="flex flex-col">
+                        <span class="text-xs font-bold text-blue-600">${progress.toFixed(0)}% Previsto</span>
+                        <span class="text-xs font-bold text-green-600">${realProgress.toFixed(0)}% Real</span>
+                    </div>
+                    ${deviationHTML}
+                </div>
+            </div>
+
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 relative">
+                <div class="flex justify-between items-center mb-6 px-2">
+                    <button onclick="window.changeMonth(-1)" class="p-2 hover:bg-gray-100 rounded-full"><i class="ph-bold ph-caret-left text-xl"></i></button>
+                    <h3 class="font-bold text-lg capitalize text-gray-800">${monthLabel}</h3>
+                    <button onclick="window.changeMonth(1)" class="p-2 hover:bg-gray-100 rounded-full"><i class="ph-bold ph-caret-right text-xl"></i></button>
+                </div>
+                <div class="calendar-grid mb-2 text-center text-xs font-bold text-gray-400 uppercase">${['D','S','T','Q','Q','S','S'].map(x=>`<div>${x}</div>`).join('')}</div>
+                <div class="calendar-grid mb-6">${dHTML}</div>
+                
+                <div class="border-t pt-4 flex justify-center">
+                        <button onclick="window.switchTab('report')" class="flex items-center space-x-2 text-sm font-bold text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg transition">
+                        <i class="ph-bold ph-file-text text-lg"></i>
+                        <span>Ver Resumo Mensal</span>
+                        </button>
+                </div>
+            </div>
+        </div>
+    </div>`;
+}
+
+function generateDailyLogHTML() {
+    const l = state.currentDailyLog; const da = !state.isEditing ? 'disabled' : ''; const hi = !state.isEditing ? 'hidden' : '';
+    const totalWorkforce = l.workforce.reduce((acc, curr) => acc + (parseInt(curr.count) || 0), 0);
+    const weatherOptions = ['sol','nublado','chuvisco','chuva']; 
+
+    const weatherSection = (label, field) => `
+        <div class="flex flex-col gap-1 w-full">
+            <span class="text-[10px] font-bold text-gray-400 uppercase">${label}</span>
+            <div class="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
+                ${weatherOptions.map(w => `
+                    <button ${da} onclick="window.updateDailyLogData('${field}','${w}')" 
+                        class="px-2 py-1.5 border rounded text-xs capitalize whitespace-nowrap flex-1 
+                        ${l[field]===w ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600'} 
+                        ${!state.isEditing && l[field] !== w ? 'opacity-40' : ''}">
+                        ${w}
+                    </button>
+                `).join('')}
+            </div>
+        </div>`;
+
+    const workforceRow = (w,i) => `
+        <div class="flex flex-col md:flex-row gap-2 mb-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
+            <div class="flex flex-col w-full">
+                <label class="text-[10px] uppercase font-bold text-gray-400 mb-1">Empresa</label>
+                <select ${da} class="w-full border rounded-lg p-2.5 text-sm bg-white outline-none focus:ring-1 focus:ring-blue-500" onchange="window.updateSubItem('workforce',${i},'company',this.value)"><option value="" disabled ${!w.company?'selected':''}>Selecionar...</option>${state.currentProjectData.companies?.map(c=>`<option value="${c.name}" ${w.company===c.name?'selected':''}>${c.name}</option>`).join('')}</select>
+            </div>
+            <div class="flex gap-2 w-full">
+                <div class="flex-1">
+                    <label class="text-[10px] uppercase font-bold text-gray-400 mb-1">Função</label>
+                    <input ${da} class="w-full border rounded-lg p-2.5 text-sm outline-none" list="roles-list" value="${w.role}" onchange="window.updateSubItem('workforce',${i},'role',this.value)" placeholder="Pedreiro...">
+                </div>
+                <div class="w-20">
+                    <label class="text-[10px] uppercase font-bold text-gray-400 mb-1">Qtd</label>
+                    <input ${da} class="w-full border rounded-lg p-2.5 text-sm text-center" type="number" value="${w.count}" onchange="window.updateSubItem('workforce',${i},'count',this.value)">
+                </div>
+                <div class="flex items-end pb-1 ${hi}">
+                    <button onclick="window.removeSubItem('workforce',${i})" class="p-2 text-red-500 bg-white border border-red-100 rounded-lg"><i class="ph-bold ph-trash"></i></button>
+                </div>
+            </div>
+        </div>`;
+
+    const materialRow = (m,i) => `
+        <div class="flex gap-2 mb-2 items-end">
+            <div class="flex-1">
+                <input ${da} class="w-full border rounded-lg p-2.5 text-sm" value="${m.item}" onchange="window.updateSubItem('materials',${i},'item',this.value)" placeholder="Material">
+            </div>
+            <div class="w-24">
+                <input ${da} class="w-full border rounded-lg p-2.5 text-sm text-center" value="${m.quantity}" onchange="window.updateSubItem('materials',${i},'quantity',this.value)" placeholder="Qtd">
+            </div>
+            <button ${hi} onclick="window.removeSubItem('materials',${i})" class="p-2.5 text-red-500 bg-gray-50 rounded-lg"><i class="ph-bold ph-trash"></i></button>
+        </div>`;
+    
+    const photoGrid = (arrName, label) => `
+        <div class="mt-3 pt-3 border-t border-gray-100">
+            <span class="text-xs font-bold text-gray-400 uppercase mb-2 block">${label}</span>
+            <div class="grid grid-cols-4 gap-2">
+                ${(l[arrName]||[]).map((p,i)=>`<div class="relative aspect-square bg-gray-100 rounded-lg overflow-hidden border border-gray-200"><img src="${p.url}" class="w-full h-full object-cover"><button ${hi} onclick="window.removeSubItem('${arrName}',${i})" class="absolute top-0.5 right-0.5 bg-red-500/80 text-white p-1 rounded-full"><i class="ph-bold ph-x text-[10px]"></i></button></div>`).join('')}
+                <label class="${hi} border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center cursor-pointer aspect-square bg-gray-50 hover:bg-gray-100"><i class="ph-bold ph-camera-plus text-xl text-gray-400"></i><input type="file" class="hidden" multiple accept="image/*" onchange="window.handlePhotoUpload(this, '${arrName}')"></label>
+            </div>
+        </div>
+    `;
+
+    return `<div class="max-w-4xl mx-auto space-y-4 w-full pb-20"><datalist id="roles-list">${getUniqueRoles()}</datalist>
+    
+    <div class="flex flex-col gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100 sticky top-0 z-20">
+        <div class="flex justify-between items-center">
+            <button onclick="window.switchTab('calendar')" class="text-gray-500 p-2"><i class="ph-bold ph-arrow-left text-xl"></i></button>
+            <input type="date" value="${state.selectedDate}" onchange="window.changeDate(this.value)" class="border-0 font-bold text-gray-800 text-lg bg-transparent text-center focus:ring-0">
+            <div class="w-10"></div>
+        </div>
+        ${state.isEditing ? `<button id="save-btn" onclick="window.persistCurrentLog()" class="w-full bg-green-600 text-white py-3 rounded-xl font-bold shadow-md">Salvar Alterações</button>` : `<button onclick="window.enableEditMode()" class="w-full bg-yellow-500 text-white py-3 rounded-xl font-bold shadow-md">Editar Diário</button>`}
+    </div>
+
+    <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+        <h3 class="font-bold text-gray-700 mb-4 flex items-center gap-2"><i class="ph-fill ph-cloud-sun text-orange-500"></i> Clima & Temperatura</h3>
+        <div class="flex flex-col gap-4">
+            ${weatherSection('Manhã (08:00 - 12:00)', 'weatherMorning')}
+            ${weatherSection('Tarde (13:00 - 17:00)', 'weatherAfternoon')}
+            <div class="flex items-center gap-2 pt-2 border-t border-gray-50">
+                <span class="text-xs font-bold text-gray-400 uppercase">Temperatura Média:</span>
+                <input ${da} type="number" value="${l.temperature}" onchange="window.updateDailyLogData('temperature',this.value)" class="bg-gray-50 border rounded w-16 text-center text-sm p-1 outline-none" placeholder="--"> <span class="text-sm text-gray-600">°C</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+        <div class="flex justify-between items-center mb-3">
+            <h3 class="font-bold text-gray-700 flex items-center gap-2"><i class="ph-fill ph-users text-purple-500"></i> Efetivo</h3>
+            <span class="text-sm font-bold bg-purple-50 text-purple-700 px-3 py-1 rounded-full">Total: ${totalWorkforce}</span>
+        </div>
+        ${l.workforce.map(workforceRow).join('')}
+        <div class="flex gap-2 mt-2 ${hi}">
+            <button onclick="window.addSubItem('workforce',{company:'',role:'',count:''})" class="flex-1 py-3 border-2 border-dashed border-blue-200 text-blue-600 rounded-xl font-medium hover:bg-blue-50">+ Adicionar</button>
+            <button onclick="window.copyWorkforceFromPreviousDay()" class="flex-1 py-3 border-2 border-dashed border-purple-200 text-purple-600 rounded-xl font-medium hover:bg-purple-50" title="Copiar do dia anterior"><i class="ph-bold ph-copy mr-2"></i>Repetir Anterior</button>
+        </div>
+    </div>
+
+    <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+        <h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-package text-amber-500"></i> Materiais</h3>
+        ${l.materials.map(materialRow).join('')}
+        <button ${hi} onclick="window.addSubItem('materials',{item:'',quantity:''})" class="w-full py-3 border-2 border-dashed border-blue-200 text-blue-600 rounded-xl font-medium hover:bg-blue-50 mt-2">+ Adicionar Material</button>
+        ${photoGrid('materialPhotos', 'Fotos de Materiais')}
+    </div>
+
+    <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+        <h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-clipboard-text text-slate-500"></i> Ocorrências</h3>
+        <textarea ${da} class="w-full border border-gray-200 rounded-xl p-3 h-32 text-sm focus:ring-2 focus:ring-blue-500 outline-none" onchange="window.updateDailyLogData('events',this.value)" placeholder="Descreva o dia...">${l.events}</textarea>
+        ${photoGrid('eventPhotos', 'Fotos das Ocorrências')}
+    </div>
+
+    <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+        <h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-camera text-blue-500"></i> Fotos Gerais</h3>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            ${l.photos.map((p,i)=>`<div class="relative aspect-square bg-gray-100 rounded-xl overflow-hidden border border-gray-200 shadow-sm"><img src="${p.url}" class="w-full h-full object-cover"><button ${hi} onclick="window.removeSubItem('photos',${i})" class="absolute top-1 right-1 bg-red-500/80 text-white p-1.5 rounded-full backdrop-blur-sm"><i class="ph-bold ph-x text-xs"></i></button><a href="${p.url}" target="_blank" class="absolute bottom-1 right-1 bg-blue-600/80 text-white p-1.5 rounded-full backdrop-blur-sm"><i class="ph-bold ph-download-simple text-xs"></i></a><div class="absolute bottom-0 w-full bg-black/60 p-1.5"><input ${da} value="${p.caption}" onchange="window.updateSubItem('photos',${i},'caption',this.value)" class="w-full bg-transparent text-white text-[10px] outline-none border-none p-0 text-center" placeholder="Legenda"></div></div>`).join('')}
+            <label class="${hi} border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center cursor-pointer aspect-square bg-gray-50 hover:bg-gray-100"><i class="ph-bold ph-camera-plus text-2xl text-gray-400 mb-1"></i><span class="text-xs text-gray-500">Adicionar</span><input type="file" class="hidden" multiple accept="image/*" onchange="window.handlePhotoUpload(this, 'photos')"></label>
+        </div>
+    </div>
+    
+    <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 ${l.meeting.hasMeeting ? 'border-l-4 border-l-indigo-500' : ''}">
+        <div class="flex justify-between items-center mb-4"><h3 class="font-bold flex items-center gap-2 text-gray-700"><i class="ph-fill ph-users-three text-indigo-500"></i> Reunião</h3><label class="relative inline-flex items-center cursor-pointer"><input ${da} type="checkbox" class="sr-only peer" ${l.meeting.hasMeeting ? 'checked' : ''} onchange="window.toggleDailyMeeting(this.checked)"><div class="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 peer-checked:bg-indigo-600 transition-all"></div></label></div>
+        ${l.meeting.hasMeeting ? `<div class="space-y-3 animate-fade-in"><input ${da} type="text" value="${l.meeting.title}" onchange="window.updateDailyMeeting('title',this.value)" class="w-full border rounded-lg p-3 text-sm focus:ring-1 focus:ring-indigo-500" placeholder="Título da Reunião"><textarea ${da} onchange="window.updateDailyMeeting('content',this.value)" class="w-full h-32 border rounded-lg p-3 text-sm focus:ring-1 focus:ring-indigo-500" placeholder="Resumo da ata...">${l.meeting.content}</textarea><div class="flex items-center justify-between bg-indigo-50 p-3 rounded-lg border border-indigo-100"><div class="flex items-center text-sm text-indigo-800 overflow-hidden"><i class="ph-fill ph-file-pdf text-xl mr-2 text-red-500"></i><span class="truncate max-w-[200px]">${l.meeting.pdfName || 'Sem anexo'}</span></div><div class="flex gap-2">${l.meeting.pdfFile ? `<a href="${l.meeting.pdfFile}" target="_blank" class="text-xs bg-white border border-indigo-200 text-indigo-600 px-3 py-1 rounded font-medium hover:bg-indigo-100">Ver</a>` : ''}<label class="${!state.isEditing ? 'hidden' : ''} cursor-pointer text-xs bg-indigo-600 text-white px-3 py-1 rounded font-medium hover:bg-indigo-700">Anexar<input type="file" class="hidden" accept=".pdf" onchange="window.handleDailyPdfUpload(this)"></label></div></div></div>` : ''}
+    </div></div>`;
+}
+
+function generateChecklistHTML() { return `<div class="max-w-4xl mx-auto w-full bg-white p-5 rounded-xl shadow-sm border border-gray-100"><h2 class="font-bold text-xl mb-4 text-gray-800 flex items-center gap-2"><i class="ph-fill ph-check-square text-green-500"></i> Checklist</h2><div class="flex gap-2 mb-6"><input id="new-todo" class="border rounded-xl p-3 flex-1 outline-none focus:ring-2 focus:ring-blue-500" placeholder="Nova pendência..."><button onclick="window.addChecklist()" class="bg-blue-600 text-white px-5 rounded-xl font-bold"><i class="ph-bold ph-plus"></i></button></div><div class="space-y-1">${state.currentProjectData.checklist.map(i=>`<div class="flex items-center gap-3 p-3 border rounded-lg ${i.completed?'bg-gray-50 border-gray-100':'bg-white border-gray-200'}"><button onclick="window.toggleChecklist(${i.id})" class="text-2xl ${i.completed?'text-green-500':'text-gray-300'}"><i class="${i.completed?'ph-fill ph-check-circle':'ph-bold ph-circle'}"></i></button><span class="flex-1 ${i.completed?'line-through text-gray-400':'text-gray-700 font-medium'}">${i.text}</span><button onclick="window.deleteChecklistItem(${i.id})" class="text-gray-300 hover:text-red-500 p-2"><i class="ph-bold ph-trash"></i></button></div>`).join('')}</div></div>`; }
+
+function generateCompaniesHTML() { return `<div class="max-w-4xl mx-auto w-full bg-white p-5 rounded-xl shadow-sm border border-gray-100"><h2 class="font-bold text-xl mb-4 text-gray-800">Empresas</h2><div class="bg-blue-50 p-4 rounded-xl mb-6"><label class="text-xs font-bold text-blue-800 uppercase mb-2 block">Nova Empresa</label><div class="flex gap-2"><input id="new-company-name" class="border border-blue-200 rounded-lg p-3 flex-1 outline-none focus:ring-2 focus:ring-blue-500" placeholder="Nome da empresa..."><button onclick="window.addCompany()" class="bg-blue-600 text-white px-6 rounded-lg font-bold">Salvar</button></div></div><div class="divide-y divide-gray-100">${state.currentProjectData.companies.map(c=>`<div class="flex justify-between items-center p-4 hover:bg-gray-50 transition"><div class="flex items-center gap-3"><div class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-500">${c.name.charAt(0)}</div><span class="font-medium text-gray-700">${c.name}</span></div><button onclick="window.deleteCompany('${c.id}')" class="text-gray-300 hover:text-red-500 p-2"><i class="ph-bold ph-trash"></i></button></div>`).join('')}</div></div>`; }
+
+function generateFinancialHTML() {
+    const financials = state.financialConfigMode ? state.tempFinancial : (state.currentProjectData.financial || []);
+    
+    // Format currency helper
+    const fmt = (v) => new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(v);
+
+    let content = '';
+
+    if (state.financialConfigMode) {
+        // Configuration Mode (Bulk)
+        content = `
+        <div class="bg-blue-50 p-5 rounded-xl border border-blue-100 mb-4 animate-fade-in">
+            <h3 class="font-bold text-blue-900 mb-3 text-sm uppercase">Gerador de Cronograma</h3>
+            
+            <div class="flex gap-2 mb-4 items-end bg-white p-3 rounded-lg border border-blue-100 shadow-sm">
+                <div class="flex-1">
+                    <label class="text-[10px] uppercase font-bold text-gray-500 block mb-1">Mês Início</label>
+                    <input type="month" id="fin-start-month" class="w-full border rounded-lg p-2 text-sm outline-none focus:ring-1 focus:ring-blue-500">
+                </div>
+                <div class="flex-1">
+                    <label class="text-[10px] uppercase font-bold text-gray-500 block mb-1">Mês Fim</label>
+                    <input type="month" id="fin-end-month" class="w-full border rounded-lg p-2 text-sm outline-none focus:ring-1 focus:ring-blue-500">
+                </div>
+                <button onclick="window.generateFinancialGrid()" class="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold shadow-sm hover:bg-blue-700 h-[38px] flex items-center gap-2">
+                        <i class="ph-bold ph-arrows-clockwise"></i> Gerar Tabela
+                </button>
+            </div>
+
+            ${financials.length > 0 ? `
+                <div class="bg-white rounded-lg border border-gray-200 overflow-hidden mb-4">
+                        <table class="w-full text-sm">
+                        <thead class="bg-gray-50 text-gray-500 font-bold uppercase text-xs">
+                            <tr><th class="p-3 text-left">Mês</th><th class="p-3 text-right">Valor Previsto Mensal (€)</th></tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            ${financials.map(f => `
+                                <tr>
+                                    <td class="p-3 font-medium text-gray-700">${f.month}</td>
+                                    <td class="p-2 text-right">
+                                        <input type="number" value="${f.planned || ''}" 
+                                            onchange="window.updateTempFinancial(${f.id}, 'planned', this.value)"
+                                            class="w-full text-right bg-blue-50/50 border border-blue-100 rounded p-2 focus:ring-2 focus:ring-blue-500 outline-none font-bold text-gray-800"
+                                            placeholder="0.00">
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="flex justify-end gap-2 border-t border-blue-200 pt-4">
+                        <button onclick="window.toggleFinancialConfig()" class="text-gray-500 font-bold text-sm px-4">Cancelar</button>
+                        <button id="btn-save-financial" onclick="window.saveFinancialConfig()" class="bg-green-600 text-white px-6 py-2 rounded-lg font-bold shadow-lg hover:bg-green-700 transition flex items-center gap-2">
+                        <i class="ph-bold ph-check"></i> Salvar Cronograma
+                        </button>
+                </div>
+            ` : '<div class="text-center p-8 text-gray-400 border-2 border-dashed border-gray-200 rounded-lg">Selecione o intervalo de datas acima para gerar a tabela.</div>'}
+        </div>`;
+    } else {
+        // View/Input Mode (Execution)
+        let accPlanned = 0;
+        let accMeasured = 0;
+
+        const rowsHTML = financials.map(f => {
+            const planned = f.planned || 0;
+            const measured = f.measured || 0;
+            
+            accPlanned += planned;
+            accMeasured += measured;
+            
+            const diff = accMeasured - accPlanned;
+            const diffClass = diff < 0 ? 'text-red-500' : 'text-green-500';
+
+            return `
+            <tr class="hover:bg-gray-50">
+                <td class="p-3 font-medium text-gray-700 border-r border-gray-100">${f.month}</td>
+                <td class="p-3 text-right text-gray-500 border-r border-gray-100">${fmt(planned)}</td>
+                <td class="p-3 text-right font-bold text-blue-700 bg-blue-50/30 border-r border-blue-50">${fmt(accPlanned)}</td>
+                <td class="p-2 text-right border-r border-gray-100 w-32 cursor-pointer hover:bg-gray-50" onclick="window.startEditingFinancial(${f.id})">
+                    ${state.editingFinancialId === f.id ? 
+                        `<input type="number" id="fin-input-${f.id}" value="${f.measured || ''}" 
+                            onblur="window.stopEditingFinancial(${f.id}, this.value)"
+                            onkeydown="if(event.key==='Enter') window.stopEditingFinancial(${f.id}, this.value)"
+                            class="w-full text-right bg-white border border-blue-500 rounded p-1.5 focus:ring-2 focus:ring-blue-500 outline-none font-bold text-gray-800 text-xs"
+                            placeholder="0.00">` : 
+                        `<span class="font-bold text-gray-800 text-xs">${measured !== 0 ? fmt(measured) : '-'}</span>`
+                    }
+                </td>
+                <td class="p-3 text-right font-bold text-gray-700 bg-gray-50/50 border-r border-gray-100">${fmt(accMeasured)}</td>
+                <td class="p-3 text-right font-bold ${diffClass}">${fmt(diff)}</td>
+            </tr>`;
+        }).join('');
+
+        const totalPlanned = financials.reduce((a,b)=>a+(b.planned||0),0);
+        const totalMeasured = financials.reduce((a,b)=>a+(b.measured||0),0);
+        const totalDiff = totalMeasured - totalPlanned;
+
+        content = `
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50 text-gray-500 font-bold uppercase text-xs border-b border-gray-200">
+                        <tr>
+                            <th rowspan="2" class="p-3 text-left bg-gray-50 border-r border-gray-200">Mês</th>
+                            <th colspan="2" class="p-2 text-center bg-blue-50/50 border-r border-blue-100 text-blue-800">Previsto</th>
+                            <th colspan="2" class="p-2 text-center bg-green-50/50 border-r border-green-100 text-green-800">Real</th>
+                            <th rowspan="2" class="p-3 text-right bg-gray-50 text-gray-700">Desvio Acum.</th>
+                        </tr>
+                        <tr>
+                            <th class="p-2 text-right bg-blue-50/30 border-r border-blue-100">Mensal</th>
+                            <th class="p-2 text-right bg-blue-50/30 border-r border-blue-100">Acumulado</th>
+                            <th class="p-2 text-right bg-green-50/30 border-r border-green-100">Faturado</th>
+                            <th class="p-2 text-right bg-green-50/30 border-r border-green-100">Acumulado</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">
+                        ${rowsHTML}
+                        ${financials.length === 0 ? '<tr><td colspan="6" class="p-8 text-center text-gray-400">Configure o cronograma clicando na engrenagem.</td></tr>' : ''}
+                    </tbody>
+                    <tfoot class="bg-gray-50 font-bold text-gray-700 border-t border-gray-200">
+                        <tr>
+                            <td class="p-3">TOTAL</td>
+                            <td class="p-3 text-right">${fmt(totalPlanned)}</td>
+                            <td class="p-3 text-right text-blue-700">${fmt(totalPlanned)}</td>
+                            <td class="p-3 text-right">${fmt(totalMeasured)}</td>
+                            <td class="p-3 text-right">${fmt(totalMeasured)}</td>
+                            <td class="p-3 text-right ${totalDiff < 0 ? 'text-red-600' : 'text-green-600'}">
+                                ${fmt(totalDiff)}
+                            </td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>`;
+    }
+
+    return `
+    <div class="max-w-4xl mx-auto w-full">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="font-bold text-xl text-gray-800 flex items-center gap-2"><i class="ph-fill ph-currency-dollar text-green-600"></i> Financeiro</h2>
+            ${!state.financialConfigMode ? `
+            <button onclick="window.toggleFinancialConfig()" class="p-2 text-gray-500 hover:text-blue-600 bg-white shadow-sm border border-gray-100 rounded-lg hover:bg-gray-50 transition">
+                <i class="ph-bold ph-gear text-xl"></i>
+            </button>` : ''}
+        </div>
+        ${content}
+    </div>`;
+}
+
+// --- REPORT PREVIEW ---
+function generateReportPreviewHTML() {
+    const p = state.currentProjectData; const y = state.calendarViewDate.getFullYear(); const m = state.calendarViewDate.getMonth();
+    const prefix = `${y}-${String(m+1).padStart(2,'0')}`;
+    // Get logs for the selected month
+    const logs = Object.keys(state.logsCache)
+        .filter(k=>k.startsWith(prefix))
+        .sort()
+        .map(k=>({date:k, ...state.logsCache[k]}));
+    
+    const activeDays = logs.filter(l => (l.workforce && l.workforce.length > 0)).length;
+    const totals = {};
+    logs.forEach(l => { 
+        if(l.workforce?.length) { 
+            l.workforce.forEach(w => totals[w.company||'Outros']=(totals[w.company||'Outros']||0)+parseInt(w.count||0)); 
+        }
+    });
+
+    return `
+    <div class="max-w-4xl mx-auto w-full pb-20">
+        <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 sticky top-0 z-20 flex justify-between items-center mb-4">
+            <button onclick="window.switchTab('calendar')" class="text-gray-500 p-2"><i class="ph-bold ph-arrow-left text-xl"></i> Voltar</button>
+            <button onclick="window.generateMonthlyReport()" class="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold shadow-sm flex items-center gap-2">
+                <i class="ph-bold ph-printer"></i> Imprimir / Salvar
+            </button>
+        </div>
+
+        <div class="bg-white p-8 rounded-none md:rounded-xl shadow-sm border border-gray-100 print-preview-content">
+            <div class="border-b-2 border-gray-800 pb-4 mb-6">
+                <h1 class="text-2xl font-bold text-gray-900">Relatório Mensal: ${state.calendarViewDate.toLocaleString('pt-PT', { month: 'long', year: 'numeric' })}</h1>
+                <p class="text-gray-600">${p.name} - ${p.client}</p>
+            </div>
+
+            <div class="mb-8">
+                <h3 class="font-bold text-lg mb-2">Média de Efetivo (Dias ativos: ${activeDays})</h3>
+                <table class="w-full text-sm border-collapse">
+                    <tr class="bg-gray-100"><th class="p-2 text-left">Empresa</th><th class="p-2 text-right">Média/Dia</th></tr>
+                    ${Object.keys(totals).map(k=>`<tr><td class="p-2 border-b">${k}</td><td class="p-2 border-b text-right">${(totals[k]/(activeDays||1)).toFixed(1)}</td></tr>`).join('')}
+                </table>
+            </div>
+
+            <div class="space-y-6">
+                <h3 class="font-bold text-lg border-b pb-2">Resumo Diário</h3>
+                ${logs.length === 0 ? '<p class="text-gray-500 italic">Sem registos neste mês.</p>' : ''}
+                ${logs.map(l => `
+                    <div class="border border-gray-200 rounded p-4 bg-gray-50 break-inside-avoid">
+                        <div class="font-bold text-blue-900 mb-1 flex justify-between">
+                            <span>${new Date(l.date).toLocaleDateString('pt-PT')}</span>
+                            <span class="text-xs font-normal text-gray-500 uppercase bg-white px-2 py-0.5 rounded border border-gray-200">${l.weatherMorning} / ${l.weatherAfternoon}</span>
+                        </div>
+                        <p class="text-sm text-gray-700 mb-3 whitespace-pre-wrap">${l.events || 'Sem ocorrências.'}</p>
+                        ${(l.photos && l.photos.length > 0) ? `
+                            <div class="flex gap-2 overflow-x-auto pb-2">
+                                ${l.photos.slice(0,3).map(ph => `<img src="${ph.url}" class="h-20 w-20 object-cover rounded border border-gray-300">`).join('')}
+                                ${l.photos.length > 3 ? `<div class="h-20 w-20 bg-gray-200 rounded flex items-center justify-center text-xs text-gray-500 font-bold">+${l.photos.length-3}</div>` : ''}
+                            </div>
+                        ` : ''}
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    </div>`;
+}
+
+// --- PRINTING (Updated to reuse the logic) ---
+window.generateMonthlyReport = () => {
+    // Logic is very similar to preview, but injects into #print-container and calls window.print()
+    const p = state.currentProjectData; const y = state.calendarViewDate.getFullYear(); const m = state.calendarViewDate.getMonth();
+    const prefix = `${y}-${String(m+1).padStart(2,'0')}`;
+    const logs = Object.keys(state.logsCache).filter(k=>k.startsWith(prefix)).sort().map(k=>({date:k,...state.logsCache[k]}));
+    const activeDays = logs.filter(l => (l.workforce && l.workforce.length > 0)).length;
+    const totals = {};
+    logs.forEach(l => { if(l.workforce?.length) l.workforce.forEach(w => totals[w.company||'Outros']=(totals[w.company||'Outros']||0)+parseInt(w.count||0)); });
+
+    document.getElementById('print-container').innerHTML = `
+        <div style="font-family: sans-serif; padding: 40px;">
+            <div style="border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px;"><h1 style="margin:0;">Relatório Mensal: ${state.calendarViewDate.toLocaleString('pt-PT', { month: 'long', year: 'numeric' })}</h1><p>${p.name}</p></div>
+            <h3>Média de Efetivo (Dias ativos: ${activeDays})</h3>
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;"><tr style="background: #eee;"><th style="padding: 8px; text-align: left;">Empresa</th><th style="padding: 8px; text-align: right;">Média/Dia</th></tr>${Object.keys(totals).map(k=>`<tr><td style="padding: 8px; border-bottom: 1px solid #eee;">${k}</td><td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${(totals[k]/(activeDays||1)).toFixed(1)}</td></tr>`).join('')}</table>
+            <h3>Resumo Diário</h3>${logs.map(l => `<div class="avoid-break" style="margin-bottom: 20px; border: 1px solid #ddd; padding: 10px;"><div style="font-weight: bold;">${new Date(l.date).toLocaleDateString('pt-PT')} - ${l.weatherMorning}/${l.weatherAfternoon}</div><div style="font-size: 0.9em; color: #666; margin-bottom: 5px; white-space: pre-wrap;">${l.events||'Sem ocorrências.'}</div><div style="display: flex; gap: 10px;">${(l.photos||[]).slice(0,3).map(ph=>`<img src="${ph.url}" style="width: 100px; height: 100px; object-fit: cover; border:1px solid #eee;">`).join('')}</div></div>`).join('')}
+        </div>`;
+    setTimeout(() => window.print(), 500);
+};
+
+window.printDailyLog = () => {
+        const p = state.currentProjectData; const l = state.currentDailyLog;
+    const totalWorkforce = l.workforce.reduce((acc, curr) => acc + (parseInt(curr.count) || 0), 0);
+    
+    // Combine all photos for print
+    const allPhotos = [...l.photos, ...(l.eventPhotos||[]), ...(l.materialPhotos||[])];
+
+    document.getElementById('print-container').innerHTML = `
+        <div style="font-family: sans-serif; padding: 40px;">
+            <div style="border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px; display: flex; justify-content: space-between;"><div><h1 style="margin:0; font-size: 24px;">${p.name}</h1><p style="margin:0; color: #666;">${p.client}</p></div><div style="text-align: right;"><p style="margin:0;">Diário de Obra</p><h2 style="margin:0;">${new Date(state.selectedDate).toLocaleDateString('pt-BR')}</h2></div></div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
+                <div style="background: #f9f9f9; padding: 15px; border: 1px solid #ddd;">
+                    <strong>Clima & Temperatura</strong><br>
+                    Manhã: <span style="text-transform: capitalize;">${l.weatherMorning}</span> | Tarde: <span style="text-transform: capitalize;">${l.weatherAfternoon}</span><br>
+                    Temp. Média: ${l.temperature}°C
+                </div>
+                <div style="background: #f9f9f9; padding: 15px; border: 1px solid #ddd;"><strong>Total Efetivo:</strong> ${totalWorkforce}</div>
+            </div>
+
+            <h3>1. Efetivo</h3><table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;"><tr style="background: #eee;"><th style="padding: 8px; text-align: left;">Empresa</th><th style="padding: 8px; text-align: left;">Função</th><th style="padding: 8px; text-align: right;">Qtd</th></tr>${l.workforce.map(w=>`<tr><td style="padding: 8px; border-bottom: 1px solid #eee;">${w.company||'-'}</td><td style="padding: 8px; border-bottom: 1px solid #eee;">${w.role}</td><td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${w.count}</td></tr>`).join('')}</table>
+            <h3>2. Materiais</h3><table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;"><tr style="background: #eee;"><th style="padding: 8px; text-align: left;">Item</th><th style="padding: 8px; text-align: right;">Qtd</th></tr>${l.materials.map(m=>`<tr><td style="padding: 8px; border-bottom: 1px solid #eee;">${m.item}</td><td style="padding: 8px; border-bottom: 1px solid #eee; text-align: right;">${m.quantity}</td></tr>`).join('')}</table>
+            
+            <h3>3. Ocorrências</h3><div style="background: #f9f9f9; padding: 15px; border: 1px solid #ddd; min-height: 100px; white-space: pre-wrap;">${l.events||'Sem ocorrências.'}</div>
+            
+            ${allPhotos.length ? `<h3>4. Registo Fotográfico</h3><div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">${allPhotos.map(x=>`<div style="border: 1px solid #ccc; border-radius: 8px; overflow: hidden; page-break-inside: avoid;"><img src="${x.url}" style="width:100%; height: 250px; object-fit: cover;"><div style="padding: 5px; background: #eee; text-align: center; font-size: 12px;">${x.caption || 'Foto'}</div></div>`).join('')}</div>` : ''}
+            
+            ${l.meeting.hasMeeting ? `
+                <div class="page-break"></div>
+                <h3>Ata de Reunião</h3>
+                <div style="background: #f9f9f9; padding: 20px; border: 1px solid #ddd;">
+                    <h4 style="margin-top: 0;">${l.meeting.title}</h4>
+                    <p style="white-space: pre-wrap;">${l.meeting.content}</p>
+                </div>
+            ` : ''}
+        </div>`;
+    setTimeout(() => window.print(), 800);
+}
