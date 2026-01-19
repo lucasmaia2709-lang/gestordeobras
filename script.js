@@ -197,6 +197,70 @@ async function uploadFile(input, pathType) {
     }
 }
 
+// --- NEW FEATURE: DOWNLOAD PHOTOS ZIP ---
+window.downloadPhotosZip = async () => {
+    const photos = state.currentDailyLog.photos || [];
+    if (photos.length === 0) { alert("Sem fotos para baixar."); return; }
+    
+    const btn = document.getElementById('btn-zip-photos');
+    const originalContent = btn.innerHTML;
+    // Show loading spinner
+    btn.innerHTML = '<i class="ph ph-spinner animate-spin text-lg"></i>';
+    btn.disabled = true;
+
+    try {
+        const zip = new JSZip();
+        // Create a folder inside zip for organization
+        const folder = zip.folder(`Fotos_${state.selectedDate}`);
+        
+        // Use Promise.all to fetch all images in parallel
+        const promises = photos.map(async (photo, index) => {
+            try {
+                // Fetch the image as a blob
+                const response = await fetch(photo.url);
+                if (!response.ok) throw new Error('Network response was not ok');
+                const blob = await response.blob();
+                
+                // Determine extension from blob type or fallback to jpg
+                const ext = blob.type.split('/')[1] || 'jpg';
+                // Clean caption for filename
+                const cleanCaption = (photo.caption || '').replace(/[^a-z0-9]/gi, '_').substring(0, 20);
+                const filename = `foto_${index + 1}${cleanCaption ? '_' + cleanCaption : ''}.${ext}`;
+                
+                folder.file(filename, blob);
+            } catch (e) {
+                console.error("Erro ao baixar foto individual:", e);
+                // Optionally add a text file noting the error for this image
+                folder.file(`erro_foto_${index+1}.txt`, `Erro ao baixar: ${photo.url}`);
+            }
+        });
+
+        await Promise.all(promises);
+        
+        // Generate the zip blob
+        const content = await zip.generateAsync({type:"blob"});
+        
+        // Trigger download
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(content);
+        link.download = `Fotos_Obra_${state.selectedDate}.zip`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        // Clean up object URL
+        setTimeout(() => URL.revokeObjectURL(link.href), 100);
+
+    } catch (e) {
+        console.error("Zip Error:", e);
+        alert("Erro ao gerar arquivo ZIP. Verifique a consola para detalhes.");
+    } finally {
+        // Restore button state
+        btn.innerHTML = originalContent;
+        btn.disabled = false;
+    }
+};
+
 window.addCompany = async () => { const v = document.getElementById('new-company-name').value; if(v) { await updateDoc(doc(db, `users/${state.user.uid}/projects/${state.currentProjectId}`), { companies: arrayUnion({ id: Date.now(), name: v }) }); } };
 window.deleteCompany = async (id) => { 
     if(confirm('Tem certeza que deseja apagar esta empresa?')) { 
@@ -656,7 +720,14 @@ function generateDailyLogHTML() {
     </div>
 
     <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
-        <h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-camera text-blue-500"></i> Fotos Gerais</h3>
+        <div class="flex justify-between items-center mb-3">
+             <h3 class="font-bold text-gray-700 flex items-center gap-2"><i class="ph-fill ph-camera text-blue-500"></i> Fotos Gerais</h3>
+             ${(l.photos && l.photos.length > 0) ? `
+             <button id="btn-zip-photos" onclick="window.downloadPhotosZip()" class="text-gray-400 hover:text-blue-600 p-2 rounded-lg hover:bg-gray-50 transition flex items-center gap-1 text-xs font-bold" title="Baixar todas em ZIP">
+                <i class="ph-bold ph-download-simple text-lg"></i>
+                <span class="hidden sm:inline">Baixar ZIP</span>
+             </button>` : ''}
+        </div>
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
             ${l.photos.map((p,i)=>`<div class="relative aspect-square bg-gray-100 rounded-xl overflow-hidden border border-gray-200 shadow-sm"><img src="${p.url}" class="w-full h-full object-cover"><button ${hi} onclick="window.removeSubItem('photos',${i})" class="absolute top-1 right-1 bg-red-500/80 text-white p-1.5 rounded-full backdrop-blur-sm"><i class="ph-bold ph-x text-xs"></i></button><a href="${p.url}" target="_blank" class="absolute bottom-1 right-1 bg-blue-600/80 text-white p-1.5 rounded-full backdrop-blur-sm"><i class="ph-bold ph-download-simple text-xs"></i></a><div class="absolute bottom-0 w-full bg-black/60 p-1.5"><input ${da} value="${p.caption}" onchange="window.updateSubItem('photos',${i},'caption',this.value)" class="w-full bg-transparent text-white text-[10px] outline-none border-none p-0 text-center" placeholder="Legenda"></div></div>`).join('')}
             <label class="${hi} border-2 border-dashed border-gray-300 rounded-xl flex flex-col items-center justify-center cursor-pointer aspect-square bg-gray-50 hover:bg-gray-100"><i class="ph-bold ph-camera-plus text-2xl text-gray-400 mb-1"></i><span class="text-xs text-gray-500">Adicionar</span><input type="file" class="hidden" multiple accept="image/*" onchange="window.handlePhotoUpload(this, 'photos')"></label>
