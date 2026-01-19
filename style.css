@@ -1,0 +1,47 @@
+.animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+
+input:disabled, select:disabled, textarea:disabled {
+    background-color: #f8fafc;
+    color: #475569;
+    cursor: not-allowed;
+    border-color: #e2e8f0;
+}
+
+/* Ajustes Mobile */
+body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* Impressão */
+@media print {
+    @page { margin: 0; size: A4; }
+    body { background: white; -webkit-print-color-adjust: exact; margin: 0; padding: 0; visibility: hidden; }
+    #print-container { visibility: visible; display: block !important; position: absolute; left: 0; top: 0; width: 100%; z-index: 9999; background: white; }
+    #print-container * { visibility: visible; }
+    aside, #mobile-header, #content-area, .modal, #global-loader, #tab-bar, .no-print { display: none !important; }
+    .page-break { page-break-before: always; }
+    .avoid-break { page-break-inside: avoid; }
+    img { max-width: 100% !important; }
+}
+
+#print-container { display: none; }
+.modal-open { display: flex !important; }
+
+/* Grid Calendário Responsivo */
+.calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.calendar-day { aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 0.9rem; }
+
+#global-loader { position: fixed; inset: 0; background: rgba(255,255,255,0.95); z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+
+/* Progress Bar Striped */
+.progress-striped {
+    background-image: linear-gradient(45deg,rgba(255,255,255,.15) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.15) 50%,rgba(255,255,255,.15) 75%,transparent 75%,transparent);
+    background-size: 1rem 1rem;
+}
