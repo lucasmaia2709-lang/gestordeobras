@@ -210,6 +210,7 @@ window.selectProject = async (id) => {
     state.activeTab = 'calendar';
     
     const targetUid = state.masterUid;
+    // Carrega todos os logs para cache (crucial para o botão de copiar dia anterior)
     onSnapshot(collection(db, `users/${targetUid}/projects/${id}/dailyLogs`), (s) => {
         state.logsCache = {}; s.docs.forEach(d => state.logsCache[d.id] = d.data()); renderApp(false);
     });
@@ -264,6 +265,49 @@ window.updateDailyLogData = (f, v) => { state.currentDailyLog[f] = v; if(f.start
 window.updateSubItem = (arr, i, f, v) => { state.currentDailyLog[arr][i][f] = v; };
 window.addSubItem = (arr, obj) => { state.currentDailyLog[arr].push(obj); renderProjectContent(false); };
 window.removeSubItem = (arr, i) => { state.currentDailyLog[arr].splice(i, 1); renderProjectContent(false); };
+
+// NOVO: Copiar Efetivo do Dia Anterior
+window.copyPreviousWorkforce = () => {
+    if (state.role === 'client' || !state.isEditing) return;
+
+    const currentDate = state.selectedDate;
+    
+    // 1. Obter todas as datas disponíveis no cache
+    const availableDates = Object.keys(state.logsCache).sort();
+    
+    // 2. Filtrar apenas datas anteriores à atual
+    const pastDates = availableDates.filter(d => d < currentDate);
+    
+    // 3. Reverter para ter as mais recentes primeiro (Ontem, Anteontem...)
+    pastDates.reverse();
+
+    let foundWorkforce = null;
+    let foundDate = null;
+
+    // 4. Procurar o primeiro dia que tenha efetivo
+    for (const date of pastDates) {
+        const log = state.logsCache[date];
+        if (log.workforce && Array.isArray(log.workforce) && log.workforce.length > 0) {
+            foundWorkforce = log.workforce;
+            foundDate = date;
+            break;
+        }
+    }
+
+    if (foundWorkforce) {
+        // Deep copy para evitar problemas de referência
+        state.currentDailyLog.workforce = JSON.parse(JSON.stringify(foundWorkforce));
+        
+        // Formatar data para exibição amigável
+        const dateObj = new Date(foundDate);
+        const dateStr = dateObj.toLocaleDateString('pt-PT');
+        
+        alert(`Efetivo copiado do dia ${dateStr} com sucesso!`);
+        renderProjectContent(false);
+    } else {
+        alert("Não foi encontrado nenhum registo de efetivo em dias anteriores.");
+    }
+};
 
 // Imagens
 const compressImage = async (file) => {
@@ -592,13 +636,90 @@ function generateCalendarHTML() {
     return `<div class="max-w-4xl mx-auto w-full"><div class="flex flex-col gap-4 mb-4"><div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100"><div class="flex justify-between items-start mb-3"><div><h2 class="text-xl font-bold text-gray-800">${p.name}</h2><p class="text-xs text-gray-500">${p.client}</p></div></div><div class="w-full bg-gray-100 rounded-full h-2.5 mb-1 overflow-hidden"><div class="bg-blue-600 h-2.5 rounded-full progress-striped animate-fade-in" style="width: ${progress.toFixed(0)}%"></div></div><div class="flex justify-between items-center"><div class="flex flex-col"><span class="text-xs font-bold text-blue-600">${progress.toFixed(0)}% Previsto</span><span class="text-xs font-bold text-green-600">${realProgress.toFixed(0)}% Real</span></div>${deviationHTML}</div></div><div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 relative"><div class="flex justify-between items-center mb-6 px-2"><button onclick="window.changeMonth(-1)" class="p-2 hover:bg-gray-100 rounded-full"><i class="ph-bold ph-caret-left text-xl"></i></button><h3 class="font-bold text-lg capitalize text-gray-800">${monthName}/${y}</h3><button onclick="window.changeMonth(1)" class="p-2 hover:bg-gray-100 rounded-full"><i class="ph-bold ph-caret-right text-xl"></i></button></div><div class="calendar-grid mb-2 text-center text-xs font-bold text-gray-400 uppercase">${['D','S','T','Q','Q','S','S'].map(x=>`<div>${x}</div>`).join('')}</div><div class="calendar-grid mb-6">${dHTML}</div>${state.role !== 'client' ? `<div class="border-t pt-4 flex justify-center"><button onclick="window.switchTab('report')" class="flex items-center space-x-2 text-sm font-bold text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg transition"><i class="ph-bold ph-file-text text-lg"></i><span>Ver Resumo Mensal</span></button></div>` : ''}</div></div></div>`;
 }
 
-// Reinjetando os originais
+// UPDATE: Adicionado botão de Copiar
 window.generateDailyLogHTML_Original = function() {
     const l = state.currentDailyLog; const da = !state.isEditing ? 'disabled' : ''; const hi = !state.isEditing ? 'hidden' : '';
     const totalWorkforce = l.workforce.reduce((acc, curr) => acc + (parseInt(curr.count) || 0), 0);
     const weatherOptions = ['sol','nublado','chuvisco','chuva'];
-    return `<div class="max-w-4xl mx-auto space-y-4 w-full pb-20"><datalist id="roles-list">${getUniqueRoles()}</datalist><div class="flex flex-col gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100 sticky top-0 z-20"><div class="flex justify-between items-center"><button onclick="window.switchTab('calendar')" class="text-gray-500 p-2"><i class="ph-bold ph-arrow-left text-xl"></i></button><input type="date" value="${state.selectedDate}" onchange="window.changeDate(this.value)" class="border-0 font-bold text-gray-800 text-lg bg-transparent text-center focus:ring-0"><div class="w-10"></div></div>${state.role !== 'client' ? (state.isEditing ? `<button id="save-btn" onclick="window.persistCurrentLog()" class="w-full bg-green-600 text-white py-3 rounded-xl font-bold shadow-md">Salvar Alterações</button>` : `<button onclick="window.enableEditMode()" class="w-full bg-yellow-500 text-white py-3 rounded-xl font-bold shadow-md">Editar Diário</button>`) : ''}</div><div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100"><h3 class="font-bold text-gray-700 mb-4 flex items-center gap-2"><i class="ph-fill ph-cloud-sun text-orange-500"></i> Clima</h3><div class="flex flex-col gap-4">${['weatherMorning', 'weatherAfternoon'].map(field => `<div class="flex flex-col gap-1 w-full"><span class="text-[10px] font-bold text-gray-400 uppercase">${field.includes('Morning')?'Manhã':'Tarde'}</span><div class="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">${weatherOptions.map(w => `<button ${da} onclick="window.updateDailyLogData('${field}','${w}')" class="px-2 py-1.5 border rounded text-xs capitalize whitespace-nowrap flex-1 ${l[field]===w ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600'} ${!state.isEditing && l[field] !== w ? 'opacity-40' : ''}">${w}</button>`).join('')}</div></div>`).join('')}<div class="flex items-center gap-2 pt-2 border-t border-gray-50"><span class="text-xs font-bold text-gray-400 uppercase">Temp. Média:</span><input ${da} type="number" value="${l.temperature}" onchange="window.updateDailyLogData('temperature',this.value)" class="bg-gray-50 border rounded w-16 text-center text-sm p-1 outline-none" placeholder="--"> <span class="text-sm text-gray-600">°C</span></div></div></div><div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100"><div class="flex justify-between items-center mb-3"><h3 class="font-bold text-gray-700 flex items-center gap-2"><i class="ph-fill ph-users text-purple-500"></i> Efetivo</h3><span class="text-sm font-bold bg-purple-50 text-purple-700 px-3 py-1 rounded-full">Total: ${totalWorkforce}</span></div>${l.workforce.map((w,i) => `<div class="flex flex-col md:flex-row gap-2 mb-3 p-3 bg-gray-50 rounded-xl border border-gray-100"><div class="flex flex-col w-full"><label class="text-[10px] uppercase font-bold text-gray-400 mb-1">Empresa</label><select ${da} class="w-full border rounded-lg p-2.5 text-sm bg-white outline-none" onchange="window.updateSubItem('workforce',${i},'company',this.value)"><option value="" disabled ${!w.company?'selected':''}>Selecionar...</option>${state.currentProjectData.companies?.map(c=>`<option value="${c.name}" ${w.company===c.name?'selected':''}>${c.name}</option>`).join('')}</select></div><div class="flex gap-2 w-full"><div class="flex-1"><label class="text-[10px] uppercase font-bold text-gray-400 mb-1">Função</label><input ${da} class="w-full border rounded-lg p-2.5 text-sm" list="roles-list" value="${w.role}" onchange="window.updateSubItem('workforce',${i},'role',this.value)"></div><div class="w-20"><label class="text-[10px] uppercase font-bold text-gray-400 mb-1">Qtd</label><input ${da} class="w-full border rounded-lg p-2.5 text-sm text-center" type="number" value="${w.count}" onchange="window.updateSubItem('workforce',${i},'count',this.value)"></div><button onclick="window.removeSubItem('workforce',${i})" class="${hi} p-2 text-red-500 bg-white border border-red-100 rounded-lg"><i class="ph-bold ph-trash"></i></button></div></div>`).join('')}<div class="flex gap-2 mt-2 ${hi}"><button onclick="window.addSubItem('workforce',{company:'',role:'',count:''})" class="flex-1 py-3 border-2 border-dashed border-blue-200 text-blue-600 rounded-xl font-medium hover:bg-blue-50">+ Adicionar</button></div></div><div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100"><h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-clipboard-text text-slate-500"></i> Ocorrências</h3><textarea ${da} class="w-full border border-gray-200 rounded-xl p-3 h-32 text-sm focus:ring-2 focus:ring-blue-500 outline-none" onchange="window.updateDailyLogData('events',this.value)" placeholder="Descreva o dia...">${l.events}</textarea></div><div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100"><h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-camera text-blue-500"></i> Fotos</h3><div class="grid grid-cols-4 gap-2">${l.photos.map((p,i)=>`<div class="relative aspect-square bg-gray-100 rounded-lg overflow-hidden"><img src="${p.url}" class="w-full h-full object-cover"><button ${hi} onclick="window.removeSubItem('photos',${i})" class="absolute top-0.5 right-0.5 bg-red-500 text-white p-1 rounded-full"><i class="ph-bold ph-x text-[10px]"></i></button></div>`).join('')}<label class="${hi} border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center cursor-pointer aspect-square"><i class="ph-bold ph-camera-plus"></i><input type="file" class="hidden" multiple accept="image/*" onchange="window.handlePhotoUpload(this, 'photos')"></label></div></div></div>`;
+    
+    return `<div class="max-w-4xl mx-auto space-y-4 w-full pb-20">
+        <datalist id="roles-list">${getUniqueRoles()}</datalist>
+        <div class="flex flex-col gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100 sticky top-0 z-20">
+            <div class="flex justify-between items-center">
+                <button onclick="window.switchTab('calendar')" class="text-gray-500 p-2"><i class="ph-bold ph-arrow-left text-xl"></i></button>
+                <input type="date" value="${state.selectedDate}" onchange="window.changeDate(this.value)" class="border-0 font-bold text-gray-800 text-lg bg-transparent text-center focus:ring-0">
+                <div class="w-10"></div>
+            </div>
+            ${state.role !== 'client' ? (state.isEditing ? `<button id="save-btn" onclick="window.persistCurrentLog()" class="w-full bg-green-600 text-white py-3 rounded-xl font-bold shadow-md">Salvar Alterações</button>` : `<button onclick="window.enableEditMode()" class="w-full bg-yellow-500 text-white py-3 rounded-xl font-bold shadow-md">Editar Diário</button>`) : ''}
+        </div>
+
+        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+            <h3 class="font-bold text-gray-700 mb-4 flex items-center gap-2"><i class="ph-fill ph-cloud-sun text-orange-500"></i> Clima</h3>
+            <div class="flex flex-col gap-4">
+                ${['weatherMorning', 'weatherAfternoon'].map(field => `
+                    <div class="flex flex-col gap-1 w-full">
+                        <span class="text-[10px] font-bold text-gray-400 uppercase">${field.includes('Morning')?'Manhã':'Tarde'}</span>
+                        <div class="flex gap-1 overflow-x-auto pb-1 scrollbar-hide">
+                            ${weatherOptions.map(w => `<button ${da} onclick="window.updateDailyLogData('${field}','${w}')" class="px-2 py-1.5 border rounded text-xs capitalize whitespace-nowrap flex-1 ${l[field]===w ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600'} ${!state.isEditing && l[field] !== w ? 'opacity-40' : ''}">${w}</button>`).join('')}
+                        </div>
+                    </div>`).join('')}
+                <div class="flex items-center gap-2 pt-2 border-t border-gray-50">
+                    <span class="text-xs font-bold text-gray-400 uppercase">Temp. Média:</span>
+                    <input ${da} type="number" value="${l.temperature}" onchange="window.updateDailyLogData('temperature',this.value)" class="bg-gray-50 border rounded w-16 text-center text-sm p-1 outline-none" placeholder="--"> <span class="text-sm text-gray-600">°C</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bold text-gray-700 flex items-center gap-2"><i class="ph-fill ph-users text-purple-500"></i> Efetivo</h3>
+                <span class="text-sm font-bold bg-purple-50 text-purple-700 px-3 py-1 rounded-full">Total: ${totalWorkforce}</span>
+            </div>
+            
+            ${l.workforce.map((w,i) => `
+                <div class="flex flex-col md:flex-row gap-2 mb-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
+                    <div class="flex flex-col w-full">
+                        <label class="text-[10px] uppercase font-bold text-gray-400 mb-1">Empresa</label>
+                        <select ${da} class="w-full border rounded-lg p-2.5 text-sm bg-white outline-none" onchange="window.updateSubItem('workforce',${i},'company',this.value)">
+                            <option value="" disabled ${!w.company?'selected':''}>Selecionar...</option>
+                            ${state.currentProjectData.companies?.map(c=>`<option value="${c.name}" ${w.company===c.name?'selected':''}>${c.name}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="flex gap-2 w-full">
+                        <div class="flex-1">
+                            <label class="text-[10px] uppercase font-bold text-gray-400 mb-1">Função</label>
+                            <input ${da} class="w-full border rounded-lg p-2.5 text-sm" list="roles-list" value="${w.role}" onchange="window.updateSubItem('workforce',${i},'role',this.value)">
+                        </div>
+                        <div class="w-20">
+                            <label class="text-[10px] uppercase font-bold text-gray-400 mb-1">Qtd</label>
+                            <input ${da} class="w-full border rounded-lg p-2.5 text-sm text-center" type="number" value="${w.count}" onchange="window.updateSubItem('workforce',${i},'count',this.value)">
+                        </div>
+                        <button onclick="window.removeSubItem('workforce',${i})" class="${hi} p-2 text-red-500 bg-white border border-red-100 rounded-lg"><i class="ph-bold ph-trash"></i></button>
+                    </div>
+                </div>
+            `).join('')}
+
+            <div class="flex gap-2 mt-2 ${hi}">
+                <button onclick="window.addSubItem('workforce',{company:'',role:'',count:''})" class="flex-1 py-3 border-2 border-dashed border-blue-200 text-blue-600 rounded-xl font-medium hover:bg-blue-50">+ Adicionar</button>
+                <button onclick="window.copyPreviousWorkforce()" class="flex-1 py-3 border-2 border-dashed border-indigo-200 text-indigo-600 rounded-xl font-medium hover:bg-indigo-50 flex items-center justify-center gap-2"><i class="ph-bold ph-copy"></i> Copiar Anterior</button>
+            </div>
+        </div>
+
+        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+            <h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-clipboard-text text-slate-500"></i> Ocorrências</h3>
+            <textarea ${da} class="w-full border border-gray-200 rounded-xl p-3 h-32 text-sm focus:ring-2 focus:ring-blue-500 outline-none" onchange="window.updateDailyLogData('events',this.value)" placeholder="Descreva o dia...">${l.events}</textarea>
+        </div>
+
+        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+            <h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-camera text-blue-500"></i> Fotos</h3>
+            <div class="grid grid-cols-4 gap-2">
+                ${l.photos.map((p,i)=>`<div class="relative aspect-square bg-gray-100 rounded-lg overflow-hidden"><img src="${p.url}" class="w-full h-full object-cover"><button ${hi} onclick="window.removeSubItem('photos',${i})" class="absolute top-0.5 right-0.5 bg-red-500 text-white p-1 rounded-full"><i class="ph-bold ph-x text-[10px]"></i></button></div>`).join('')}
+                <label class="${hi} border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center cursor-pointer aspect-square"><i class="ph-bold ph-camera-plus"></i><input type="file" class="hidden" multiple accept="image/*" onchange="window.handlePhotoUpload(this, 'photos')"></label>
+            </div>
+        </div>
+    </div>`;
 }
+
 window.generateChecklistHTML_Original = function() { return `<div class="max-w-4xl mx-auto w-full bg-white p-5 rounded-xl shadow-sm border border-gray-100"><h2 class="font-bold text-xl mb-4 text-gray-800 flex items-center gap-2"><i class="ph-fill ph-check-square text-green-500"></i> Checklist</h2>${state.role !== 'client' ? `<div class="flex gap-2 mb-6"><input id="new-todo" class="border rounded-xl p-3 flex-1 outline-none" placeholder="Nova pendência..."><button onclick="window.addChecklist()" class="bg-blue-600 text-white px-5 rounded-xl font-bold"><i class="ph-bold ph-plus"></i></button></div>` : ''}<div class="space-y-1">${state.currentProjectData.checklist.map(i=>`<div class="flex items-center gap-3 p-3 border rounded-lg ${i.completed?'bg-gray-50 border-gray-100':'bg-white border-gray-200'}"><button ${state.role === 'client' ? 'disabled' : ''} onclick="window.toggleChecklist(${i.id})" class="text-2xl ${i.completed?'text-green-500':'text-gray-300'}"><i class="${i.completed?'ph-fill ph-check-circle':'ph-bold ph-circle'}"></i></button><span class="flex-1 ${i.completed?'line-through text-gray-400':'text-gray-700 font-medium'}">${i.text}</span>${state.role !== 'client' ? `<button onclick="window.deleteChecklistItem(${i.id})" class="text-gray-300 hover:text-red-500 p-2"><i class="ph-bold ph-trash"></i></button>`:''}</div>`).join('')}</div></div>`; }
 window.generateCompaniesHTML_Original = function() { return `<div class="max-w-4xl mx-auto w-full bg-white p-5 rounded-xl shadow-sm border border-gray-100"><h2 class="font-bold text-xl mb-4 text-gray-800">Empresas</h2>${state.role==='master'?`<div class="bg-blue-50 p-4 rounded-xl mb-6"><label class="text-xs font-bold text-blue-800 uppercase mb-2 block">Nova Empresa</label><div class="flex gap-2"><input id="new-company-name" class="border border-blue-200 rounded-lg p-3 flex-1 outline-none"><button onclick="window.addCompany()" class="bg-blue-600 text-white px-6 rounded-lg font-bold">Salvar</button></div></div>`:''}<div class="divide-y divide-gray-100">${state.currentProjectData.companies.map(c=>`<div class="flex justify-between items-center p-4 hover:bg-gray-50"><div class="flex items-center gap-3"><div class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-500">${c.name.charAt(0)}</div><span class="font-medium text-gray-700">${c.name}</span></div>${state.role==='master'?`<button onclick="window.deleteCompany('${c.id}')" class="text-gray-300 hover:text-red-500 p-2"><i class="ph-bold ph-trash"></i></button>`:''}</div>`).join('')}</div></div>`; }
 window.generateFinancialHTML = function() {
