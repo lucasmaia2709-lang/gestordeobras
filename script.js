@@ -235,6 +235,9 @@ window.loadDailyLogForDate = async (date) => {
         state.currentDailyLog = JSON.parse(JSON.stringify(c)); 
         if(!state.currentDailyLog.weatherMorning) state.currentDailyLog.weatherMorning = state.currentDailyLog.weather || 'sol';
         if(!state.currentDailyLog.weatherAfternoon) state.currentDailyLog.weatherAfternoon = state.currentDailyLog.weather || 'sol';
+        // Garantir que existe objeto de meeting
+        if(!state.currentDailyLog.meeting) state.currentDailyLog.meeting = { hasMeeting: false };
+        
         state.currentDailyLog.eventPhotos = state.currentDailyLog.eventPhotos || [];
         state.currentDailyLog.materialPhotos = state.currentDailyLog.materialPhotos || [];
         state.currentDailyLog.photos = state.currentDailyLog.photos || [];
@@ -265,6 +268,25 @@ window.updateDailyLogData = (f, v) => { state.currentDailyLog[f] = v; if(f.start
 window.updateSubItem = (arr, i, f, v) => { state.currentDailyLog[arr][i][f] = v; };
 window.addSubItem = (arr, obj) => { state.currentDailyLog[arr].push(obj); renderProjectContent(false); };
 window.removeSubItem = (arr, i) => { state.currentDailyLog[arr].splice(i, 1); renderProjectContent(false); };
+
+// Logica Reunião
+window.toggleMeeting = (checked) => {
+    if (!state.currentDailyLog.meeting) state.currentDailyLog.meeting = {};
+    state.currentDailyLog.meeting.hasMeeting = checked;
+    renderProjectContent(false);
+};
+
+window.removeMeetingPdf = async () => {
+    if(confirm('Remover anexo?')) {
+        state.currentDailyLog.meeting.pdfFile = null;
+        state.currentDailyLog.meeting.pdfName = null;
+        if(state.selectedDate && state.currentProjectId) {
+             const logRef = doc(db, `users/${state.masterUid}/projects/${state.currentProjectId}/dailyLogs/${state.selectedDate}`);
+             await setDoc(logRef, state.currentDailyLog, { merge: true });
+        }
+        renderProjectContent(false);
+    }
+};
 
 // NOVO: Copiar Efetivo do Dia Anterior
 window.copyPreviousWorkforce = () => {
@@ -359,7 +381,12 @@ async function uploadFile(input, pathType) {
         const sRef = ref(storage, `users/${state.masterUid}/projects/${state.currentProjectId}/${pathType}/${Date.now()}_${file.name}`);
         try {
             const snap = await uploadBytes(sRef, file); const url = await getDownloadURL(snap.ref);
-            state.currentDailyLog.meeting.pdfFile = url; state.currentDailyLog.meeting.pdfName = file.name;
+            // Check if meeting object exists
+            if (!state.currentDailyLog.meeting) state.currentDailyLog.meeting = { hasMeeting: true };
+            
+            state.currentDailyLog.meeting.pdfFile = url; 
+            state.currentDailyLog.meeting.pdfName = file.name;
+            
             const logRef = doc(db, `users/${state.masterUid}/projects/${state.currentProjectId}/dailyLogs/${state.selectedDate}`);
             await setDoc(logRef, state.currentDailyLog, { merge: true });
             renderProjectContent(false);
@@ -523,7 +550,8 @@ window.openClientViewModal = () => {
     document.getElementById('client-modal-date').textContent = d.getDate() + ' ' + d.toLocaleString('pt-PT', { month: 'short' });
     document.getElementById('client-modal-date-label').textContent = d.toLocaleString('pt-PT', { weekday: 'long' });
     document.getElementById('client-modal-temp').textContent = (l.temperature || '--') + '°';
-    document.getElementById('client-modal-weather-text').textContent = `${l.weatherMorning} / ${l.weatherAfternoon}`;
+    // UPDATE: Formatação de Clima (Manhã / Tarde)
+    document.getElementById('client-modal-weather-text').textContent = `Manhã: ${l.weatherMorning} / Tarde: ${l.weatherAfternoon}`;
     
     const w = (l.weatherMorning || '').toLowerCase();
     let icon = 'ph-sun'; if(w.includes('chuva')) icon = 'ph-cloud-rain'; else if(w.includes('nublado')) icon = 'ph-cloud';
@@ -642,6 +670,9 @@ window.generateDailyLogHTML_Original = function() {
     const totalWorkforce = l.workforce.reduce((acc, curr) => acc + (parseInt(curr.count) || 0), 0);
     const weatherOptions = ['sol','nublado','chuvisco','chuva'];
     
+    // Garantir que a estrutura de reunião existe
+    if (!l.meeting) l.meeting = { hasMeeting: false };
+
     return `<div class="max-w-4xl mx-auto space-y-4 w-full pb-20">
         <datalist id="roles-list">${getUniqueRoles()}</datalist>
         <div class="flex flex-col gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-100 sticky top-0 z-20">
@@ -708,6 +739,37 @@ window.generateDailyLogHTML_Original = function() {
         <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
             <h3 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-clipboard-text text-slate-500"></i> Ocorrências</h3>
             <textarea ${da} class="w-full border border-gray-200 rounded-xl p-3 h-32 text-sm focus:ring-2 focus:ring-blue-500 outline-none" onchange="window.updateDailyLogData('events',this.value)" placeholder="Descreva o dia...">${l.events}</textarea>
+        </div>
+
+        <!-- BLOCK REUNIÃO -->
+        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="font-bold text-gray-700 flex items-center gap-2"><i class="ph-fill ph-users-three text-indigo-500"></i> Reunião</h3>
+                <label class="flex items-center gap-2 cursor-pointer">
+                     <input type="checkbox" ${da} class="w-5 h-5 rounded text-blue-600 focus:ring-blue-500" ${l.meeting.hasMeeting ? 'checked' : ''} onchange="window.toggleMeeting(this.checked)">
+                     <span class="text-sm font-medium text-gray-700">Houve reunião hoje?</span>
+                </label>
+            </div>
+            
+            ${l.meeting.hasMeeting ? `
+                <div class="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-200 animate-fade-in">
+                    ${l.meeting.pdfFile ? `
+                        <div class="flex items-center justify-between bg-white p-3 rounded-lg border border-gray-200">
+                            <div class="flex items-center gap-3 overflow-hidden">
+                                <div class="bg-red-100 text-red-600 p-2 rounded-lg"><i class="ph-fill ph-file-pdf text-xl"></i></div>
+                                <a href="${l.meeting.pdfFile}" target="_blank" class="text-sm font-bold text-gray-700 hover:text-blue-600 truncate hover:underline">${l.meeting.pdfName || 'Ata de Reunião.pdf'}</a>
+                            </div>
+                            <button ${hi} onclick="window.removeMeetingPdf()" class="text-gray-400 hover:text-red-500 p-2"><i class="ph-bold ph-trash"></i></button>
+                        </div>
+                    ` : `
+                        <div class="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg p-6 hover:bg-gray-100 transition cursor-pointer relative">
+                            <i class="ph-duotone ph-file-arrow-up text-4xl text-gray-400 mb-2"></i>
+                            <span class="text-sm font-bold text-gray-500">Anexar Ata de Reunião (PDF)</span>
+                            <input ${da} type="file" accept="application/pdf" class="absolute inset-0 opacity-0 cursor-pointer" onchange="window.handleDailyPdfUpload(this)">
+                        </div>
+                    `}
+                </div>
+            ` : ''}
         </div>
 
         <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
