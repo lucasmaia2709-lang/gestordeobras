@@ -557,8 +557,44 @@ window.openClientViewModal = () => {
     let icon = 'ph-sun'; if(w.includes('chuva')) icon = 'ph-cloud-rain'; else if(w.includes('nublado')) icon = 'ph-cloud';
     document.getElementById('client-modal-weather-icon').className = `ph-fill ${icon} text-2xl text-yellow-300`;
 
+    // UPDATE: Total Workforce Calculation
+    const totalWorkforce = (l.workforce || []).reduce((acc, curr) => acc + (parseInt(curr.count) || 0), 0);
+
     const allPhotos = [...(l.photos||[]), ...(l.eventPhotos||[]), ...(l.materialPhotos||[])];
-    content.innerHTML = `<div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100"><h4 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-users text-indigo-500"></i> Equipa em Obra</h4><div class="space-y-3">${l.workforce && l.workforce.length > 0 ? l.workforce.map(w => `<div class="flex justify-between items-center border-b border-gray-50 last:border-0 pb-2 last:pb-0"><div><p class="font-bold text-sm text-gray-800">${w.role}</p><p class="text-[10px] uppercase text-gray-400 font-bold">${w.company || 'Geral'}</p></div><span class="bg-indigo-50 text-indigo-700 font-bold px-3 py-1 rounded-full text-xs">${w.count} pessoas</span></div>`).join('') : '<p class="text-sm text-gray-400 italic">Sem registo de equipa.</p>'}</div></div>${allPhotos.length > 0 ? `<div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100"><h4 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-camera text-blue-500"></i> Galeria do Dia</h4><div class="grid grid-cols-2 gap-3">${allPhotos.map(p => `<div class="relative aspect-square rounded-xl overflow-hidden shadow-sm"><img src="${p.url}" class="w-full h-full object-cover" onclick="window.open('${p.url}')"></div>`).join('')}</div></div>` : ''}<div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100"><h4 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-clipboard-text text-amber-500"></i> Notas do Dia</h4><p class="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">${l.events || 'Nenhuma ocorrência relevante registada hoje.'}</p></div>`;
+    
+    // UPDATE: Inserido o total no HTML do modal (no título de equipa)
+    content.innerHTML = `
+    <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+        <div class="flex justify-between items-center mb-3">
+            <h4 class="font-bold text-gray-700 flex items-center gap-2">
+                <i class="ph-fill ph-users text-indigo-500"></i> Equipa em Obra
+            </h4>
+            <span class="bg-indigo-50 text-indigo-700 font-bold px-3 py-1 rounded-full text-xs">Total: ${totalWorkforce}</span>
+        </div>
+        <div class="space-y-3">
+            ${l.workforce && l.workforce.length > 0 ? l.workforce.map(w => `
+                <div class="flex justify-between items-center border-b border-gray-50 last:border-0 pb-2 last:pb-0">
+                    <div>
+                        <p class="font-bold text-sm text-gray-800">${w.role}</p>
+                        <p class="text-[10px] uppercase text-gray-400 font-bold">${w.company || 'Geral'}</p>
+                    </div>
+                    <span class="bg-indigo-50 text-indigo-700 font-bold px-3 py-1 rounded-full text-xs">${w.count} pessoas</span>
+                </div>`).join('') : '<p class="text-sm text-gray-400 italic">Sem registo de equipa.</p>'}
+        </div>
+    </div>
+    
+    ${allPhotos.length > 0 ? `
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+            <h4 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-camera text-blue-500"></i> Galeria do Dia</h4>
+            <div class="grid grid-cols-2 gap-3">
+                ${allPhotos.map(p => `<div class="relative aspect-square rounded-xl overflow-hidden shadow-sm"><img src="${p.url}" class="w-full h-full object-cover" onclick="window.open('${p.url}')"></div>`).join('')}
+            </div>
+        </div>` : ''}
+        
+    <div class="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+        <h4 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><i class="ph-fill ph-clipboard-text text-amber-500"></i> Notas do Dia</h4>
+        <p class="text-sm text-gray-600 leading-relaxed whitespace-pre-wrap">${l.events || 'Nenhuma ocorrência relevante registada hoje.'}</p>
+    </div>`;
     modal.classList.remove('hidden'); modal.classList.add('flex');
 };
 
@@ -784,16 +820,81 @@ window.generateDailyLogHTML_Original = function() {
 
 window.generateChecklistHTML_Original = function() { return `<div class="max-w-4xl mx-auto w-full bg-white p-5 rounded-xl shadow-sm border border-gray-100"><h2 class="font-bold text-xl mb-4 text-gray-800 flex items-center gap-2"><i class="ph-fill ph-check-square text-green-500"></i> Checklist</h2>${state.role !== 'client' ? `<div class="flex gap-2 mb-6"><input id="new-todo" class="border rounded-xl p-3 flex-1 outline-none" placeholder="Nova pendência..."><button onclick="window.addChecklist()" class="bg-blue-600 text-white px-5 rounded-xl font-bold"><i class="ph-bold ph-plus"></i></button></div>` : ''}<div class="space-y-1">${state.currentProjectData.checklist.map(i=>`<div class="flex items-center gap-3 p-3 border rounded-lg ${i.completed?'bg-gray-50 border-gray-100':'bg-white border-gray-200'}"><button ${state.role === 'client' ? 'disabled' : ''} onclick="window.toggleChecklist(${i.id})" class="text-2xl ${i.completed?'text-green-500':'text-gray-300'}"><i class="${i.completed?'ph-fill ph-check-circle':'ph-bold ph-circle'}"></i></button><span class="flex-1 ${i.completed?'line-through text-gray-400':'text-gray-700 font-medium'}">${i.text}</span>${state.role !== 'client' ? `<button onclick="window.deleteChecklistItem(${i.id})" class="text-gray-300 hover:text-red-500 p-2"><i class="ph-bold ph-trash"></i></button>`:''}</div>`).join('')}</div></div>`; }
 window.generateCompaniesHTML_Original = function() { return `<div class="max-w-4xl mx-auto w-full bg-white p-5 rounded-xl shadow-sm border border-gray-100"><h2 class="font-bold text-xl mb-4 text-gray-800">Empresas</h2>${state.role==='master'?`<div class="bg-blue-50 p-4 rounded-xl mb-6"><label class="text-xs font-bold text-blue-800 uppercase mb-2 block">Nova Empresa</label><div class="flex gap-2"><input id="new-company-name" class="border border-blue-200 rounded-lg p-3 flex-1 outline-none"><button onclick="window.addCompany()" class="bg-blue-600 text-white px-6 rounded-lg font-bold">Salvar</button></div></div>`:''}<div class="divide-y divide-gray-100">${state.currentProjectData.companies.map(c=>`<div class="flex justify-between items-center p-4 hover:bg-gray-50"><div class="flex items-center gap-3"><div class="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center font-bold text-gray-500">${c.name.charAt(0)}</div><span class="font-medium text-gray-700">${c.name}</span></div>${state.role==='master'?`<button onclick="window.deleteCompany('${c.id}')" class="text-gray-300 hover:text-red-500 p-2"><i class="ph-bold ph-trash"></i></button>`:''}</div>`).join('')}</div></div>`; }
+
+// UPDATE: Added financial highlight cards
 window.generateFinancialHTML = function() {
     const financials = state.financialConfigMode ? state.tempFinancial : (state.currentProjectData.financial || []);
     const fmt = (v) => new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(v);
+    
     if (state.financialConfigMode) return window.generateFinancialHTML_Config(financials);
+    
+    // Calculate Totals for Highlights
+    const totalPlanned = financials.reduce((acc, f) => acc + (f.planned || 0), 0);
+    const totalMeasured = financials.reduce((acc, f) => acc + (f.measured || 0), 0);
+    const remainingToInvoice = totalPlanned - totalMeasured;
+
     let accPlanned = 0; let accMeasured = 0;
     const rowsHTML = financials.map(f => {
         const planned = f.planned || 0; const measured = f.measured || 0; accPlanned += planned; accMeasured += measured; const diff = accMeasured - accPlanned;
         return `<tr class="hover:bg-gray-50"><td class="p-3 font-medium text-gray-700 border-r border-gray-100">${f.month}</td><td class="p-3 text-right text-gray-500 border-r border-gray-100">${fmt(planned)}</td><td class="p-3 text-right font-bold text-blue-700 bg-blue-50/30 border-r border-blue-50">${fmt(accPlanned)}</td><td class="p-2 text-right border-r border-gray-100 w-32 cursor-pointer hover:bg-gray-50" onclick="window.startEditingFinancial(${f.id})">${state.editingFinancialId === f.id ? `<input type="number" id="fin-input-${f.id}" value="${f.measured || ''}" onblur="window.stopEditingFinancial(${f.id}, this.value)" class="w-full text-right bg-white border border-blue-500 rounded p-1.5 focus:ring-2 focus:ring-blue-500 outline-none font-bold text-gray-800 text-xs">` : `<span class="font-bold text-gray-800 text-xs">${measured !== 0 ? fmt(measured) : '-'}</span>`}</td><td class="p-3 text-right font-bold text-gray-700 bg-gray-50/50 border-r border-gray-100">${fmt(accMeasured)}</td><td class="p-3 text-right font-bold ${diff < 0 ? 'text-red-500' : 'text-green-500'}">${fmt(diff)}</td></tr>`;
     }).join('');
-    return `<div class="max-w-4xl mx-auto w-full"><div class="flex justify-between items-center mb-6"><h2 class="font-bold text-xl text-gray-800 flex items-center gap-2"><i class="ph-fill ph-currency-dollar text-green-600"></i> Financeiro</h2>${state.role === 'master' ? `<button onclick="window.toggleFinancialConfig()" class="p-2 text-gray-500 hover:text-blue-600 bg-white shadow-sm border border-gray-100 rounded-lg"><i class="ph-bold ph-gear text-xl"></i></button>` : ''}</div><div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden"><div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-gray-50 text-gray-500 font-bold uppercase text-xs border-b border-gray-200"><tr><th rowspan="2" class="p-3 text-left bg-gray-50 border-r border-gray-200">Mês</th><th colspan="2" class="p-2 text-center bg-blue-50/50 border-r border-blue-100 text-blue-800">Previsto</th><th colspan="2" class="p-2 text-center bg-green-50/50 border-r border-green-100 text-green-800">Real</th><th rowspan="2" class="p-3 text-right bg-gray-50 text-gray-700">Desvio Acum.</th></tr><tr><th class="p-2 text-right bg-blue-50/30 border-r border-blue-100">Mensal</th><th class="p-2 text-right bg-blue-50/30 border-r border-blue-100">Acumulado</th><th class="p-2 text-right bg-green-50/30 border-r border-green-100">Faturado</th><th class="p-2 text-right bg-green-50/30 border-r border-green-100">Acumulado</th></tr></thead><tbody class="divide-y divide-gray-100">${rowsHTML}</tbody></table></div></div></div>`;
+
+    // Highlight Cards HTML
+    const cardsHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-l-4 border-gray-100 border-l-green-500">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-xs font-bold text-gray-500 uppercase mb-1">Valor Faturado</p>
+                        <h3 class="text-2xl font-bold text-green-600">${fmt(totalMeasured)}</h3>
+                    </div>
+                    <div class="p-2 bg-green-50 rounded-lg text-green-600"><i class="ph-fill ph-check-circle text-xl"></i></div>
+                </div>
+                <p class="text-xs text-gray-400 mt-2 font-medium">${totalPlanned > 0 ? ((totalMeasured/totalPlanned)*100).toFixed(1) : 0}% do orçamento total</p>
+            </div>
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-l-4 border-gray-100 border-l-blue-500">
+                <div class="flex justify-between items-start">
+                    <div>
+                        <p class="text-xs font-bold text-gray-500 uppercase mb-1">Valor por Faturar</p>
+                        <h3 class="text-2xl font-bold text-blue-600">${fmt(remainingToInvoice)}</h3>
+                    </div>
+                    <div class="p-2 bg-blue-50 rounded-lg text-blue-600"><i class="ph-fill ph-hourglass text-xl"></i></div>
+                </div>
+                <p class="text-xs text-gray-400 mt-2 font-medium">${totalPlanned > 0 ? ((remainingToInvoice/totalPlanned)*100).toFixed(1) : 0}% restante</p>
+            </div>
+        </div>
+    `;
+
+    return `<div class="max-w-4xl mx-auto w-full">
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="font-bold text-xl text-gray-800 flex items-center gap-2"><i class="ph-fill ph-currency-dollar text-green-600"></i> Financeiro</h2>
+            ${state.role === 'master' ? `<button onclick="window.toggleFinancialConfig()" class="p-2 text-gray-500 hover:text-blue-600 bg-white shadow-sm border border-gray-100 rounded-lg"><i class="ph-bold ph-gear text-xl"></i></button>` : ''}
+        </div>
+        
+        ${cardsHTML}
+
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50 text-gray-500 font-bold uppercase text-xs border-b border-gray-200">
+                        <tr>
+                            <th rowspan="2" class="p-3 text-left bg-gray-50 border-r border-gray-200">Mês</th>
+                            <th colspan="2" class="p-2 text-center bg-blue-50/50 border-r border-blue-100 text-blue-800">Previsto</th>
+                            <th colspan="2" class="p-2 text-center bg-green-50/50 border-r border-green-100 text-green-800">Real</th>
+                            <th rowspan="2" class="p-3 text-right bg-gray-50 text-gray-700">Desvio Acum.</th>
+                        </tr>
+                        <tr>
+                            <th class="p-2 text-right bg-blue-50/30 border-r border-blue-100">Mensal</th>
+                            <th class="p-2 text-right bg-blue-50/30 border-r border-blue-100">Acumulado</th>
+                            <th class="p-2 text-right bg-green-50/30 border-r border-green-100">Faturado</th>
+                            <th class="p-2 text-right bg-green-50/30 border-r border-green-100">Acumulado</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100">${rowsHTML}</tbody>
+                </table>
+            </div>
+        </div>
+    </div>`;
 }
 window.generateFinancialHTML_Config = function(financials) {
     return `<div class="max-w-4xl mx-auto w-full"><div class="bg-blue-50 p-5 rounded-xl border border-blue-100 mb-4 animate-fade-in"><h3 class="font-bold text-blue-900 mb-3 text-sm uppercase">Gerador de Cronograma</h3><div class="flex gap-2 mb-4 items-end bg-white p-3 rounded-lg border border-blue-100 shadow-sm"><div class="flex-1"><label class="text-[10px] uppercase font-bold text-gray-500 block mb-1">Início</label><input type="month" id="fin-start-month" class="w-full border rounded-lg p-2 text-sm outline-none"></div><div class="flex-1"><label class="text-[10px] uppercase font-bold text-gray-500 block mb-1">Fim</label><input type="month" id="fin-end-month" class="w-full border rounded-lg p-2 text-sm outline-none"></div><button onclick="window.generateFinancialGrid()" class="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold shadow-sm h-[38px]">Gerar</button></div>${financials.map(f => `<div class="flex justify-between p-2 bg-white mb-1 rounded border border-gray-100"><span>${f.month}</span><input type="number" value="${f.planned||''}" onchange="window.updateTempFinancial(${f.id}, 'planned', this.value)" class="text-right border bg-gray-50 rounded p-1 w-32"></div>`).join('')}<div class="flex justify-end gap-2 border-t border-blue-200 pt-4"><button onclick="window.toggleFinancialConfig()" class="text-gray-500 font-bold text-sm px-4">Cancelar</button><button onclick="window.saveFinancialConfig()" class="bg-green-600 text-white px-6 py-2 rounded-lg font-bold shadow-lg">Salvar</button></div></div></div>`;
