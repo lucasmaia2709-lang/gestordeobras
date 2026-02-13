@@ -310,9 +310,9 @@ export const DailyLog: React.FC = () => {
                     />
                 </section>
 
-                {/* Floating Action Button: Edit or Save */}
+                {/* Action Button: Edit or Save */}
                 {profile?.role !== 'client' && (
-                    <div className="fixed bottom-6 right-6 md:static md:mt-6">
+                    <div className="flex justify-center mt-8">
                         {isEditing ? (
                             <button
                                 onClick={handleSave}
