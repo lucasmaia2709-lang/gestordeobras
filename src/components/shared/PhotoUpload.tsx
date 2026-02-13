@@ -11,6 +11,8 @@ interface PhotoUploadProps {
     isEditing: boolean;
 }
 
+import imageCompression from 'browser-image-compression';
+
 export const PhotoUpload: React.FC<PhotoUploadProps> = ({ photos, path, onUpdate, isEditing }) => {
     const [uploading, setUploading] = useState(false);
 
@@ -20,28 +22,44 @@ export const PhotoUpload: React.FC<PhotoUploadProps> = ({ photos, path, onUpdate
 
         try {
             const files = Array.from(e.target.files);
-            const newItems: PhotoItem[] = [];
 
-            for (const file of files) {
-                // Compress logic could go here (omitted for brevity, assume direct upload)
-                const storageRef = ref(storage, `${path}/${Date.now()}_${file.name}`);
-                const snapshot = await uploadBytes(storageRef, file);
-                const url = await getDownloadURL(snapshot.ref);
+            const uploadPromises = files.map(async (file) => {
+                // Compression options
+                const options = {
+                    maxSizeMB: 1,
+                    maxWidthOrHeight: 1920,
+                    useWebWorker: true,
+                };
 
-                newItems.push({
-                    url,
-                    caption: 'Foto',
-                    storagePath: snapshot.ref.fullPath
-                });
-            }
+                try {
+                    // Compress the image
+                    const compressedFile = await imageCompression(file, options);
 
+                    const storageRef = ref(storage, `${path}/${Date.now()}_${file.name}`);
+                    const snapshot = await uploadBytes(storageRef, compressedFile);
+                    const url = await getDownloadURL(snapshot.ref);
+
+                    return {
+                        url,
+                        caption: 'Foto',
+                        storagePath: snapshot.ref.fullPath
+                    };
+                } catch (error) {
+                    console.error(`Error processing file ${file.name}:`, error);
+                    throw error;
+                }
+            });
+
+            const newItems = await Promise.all(uploadPromises);
             onUpdate([...photos, ...newItems]);
 
         } catch (error) {
-            alert("Erro ao enviar foto.");
+            alert("Erro ao enviar foto(s). Verifique sua conexão e tente novamente.");
             console.error(error);
         } finally {
             setUploading(false);
+            // Clear input
+            e.target.value = '';
         }
     };
 
