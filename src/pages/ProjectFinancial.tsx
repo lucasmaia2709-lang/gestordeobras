@@ -71,12 +71,39 @@ export const ProjectFinancial: React.FC = () => {
         setIsDirty(true);
     };
 
+    // Summary calculations
+    const sortedRecords = [...records].sort((a, b) => a.month.localeCompare(b.month));
+
+    // Find last month with measured value > 0 (Reverse search)
+    let currentRecord = [...sortedRecords].reverse().find(r => (r.measured || 0) > 0);
+
+    // Fallback to latest record if none have measured > 0 or if there are no records
+    if (!currentRecord && sortedRecords.length > 0) {
+        currentRecord = sortedRecords[sortedRecords.length - 1];
+    }
+
+    let accPlannedVal = 0;
+    let accMeasuredVal = 0;
+    if (currentRecord) {
+        sortedRecords.forEach(r => {
+            if (r.month <= currentRecord.month) {
+                accPlannedVal += Number(r.planned || 0);
+                accMeasuredVal += Number(r.measured || 0);
+            }
+        });
+    }
+
+    const [showTable, setShowTable] = useState(false);
+
     if (!project) return <div className="p-8">Carregando...</div>;
 
     const totalPlanned = records.reduce((acc: number, curr: FinancialRecord) => acc + Number(curr.planned || 0), 0);
     const totalMeasured = records.reduce((acc: number, curr: FinancialRecord) => acc + Number(curr.measured || 0), 0);
     const isMaster = profile?.role === 'master';
     const canEdit = isMaster; // Only master can edit financials usually
+
+    const formatCurrency = (val: number) =>
+        new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(val);
 
     return (
         <div className="max-w-4xl mx-auto p-4 md:p-8 pb-24">
@@ -106,38 +133,65 @@ export const ProjectFinancial: React.FC = () => {
                 )}
             </div>
 
-            {/* Summary Cards */}
+            {/* Global Summary Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
                     <p className="text-xs font-bold text-gray-400 uppercase">Total Previsto</p>
-                    <p className="text-2xl font-bold text-gray-900 mt-1">
-                        {new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(totalPlanned)}
-                    </p>
+                    <p className="text-2xl font-bold text-gray-900 mt-1">{formatCurrency(totalPlanned)}</p>
                 </div>
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
                     <p className="text-xs font-bold text-gray-400 uppercase">Total Realizado</p>
-                    <p className="text-2xl font-bold text-ios-green mt-1">
-                        {new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(totalMeasured)}
+                    <p className="text-2xl font-bold text-ios-green mt-1">{formatCurrency(totalMeasured)}</p>
+                </div>
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <p className="text-xs font-bold text-gray-400 uppercase">Saldo</p>
+                    <p className={clsx(
+                        "text-2xl font-bold mt-1",
+                        (totalPlanned - totalMeasured) >= 0 ? "text-gray-900" : "text-red-500"
+                    )}>
+                        {formatCurrency(totalPlanned - totalMeasured)}
+                    </p>
+                </div>
+            </div>
+
+            {/* Monthly Summary Cards (Last Entry with Measurement) */}
+            <div className="md:grid md:grid-cols-2 gap-4 mb-8 space-y-4 md:space-y-0">
+                <div className="md:col-span-2">
+                    <h2 className="text-white font-bold ml-1 mb-2">
+                        Última Medição {currentRecord && `(${currentRecord.month})`}
+                    </h2>
+                </div>
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <p className="text-xs font-bold text-gray-400 uppercase">Faturamento Previsto</p>
+                    <p className="text-xl font-bold text-gray-900 mt-1">
+                        {currentRecord ? formatCurrency(currentRecord.planned || 0) : '€ 0,00'}
                     </p>
                 </div>
                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                    <p className="text-xs font-bold text-gray-400 uppercase">Progresso Físico</p>
-                    <div className="flex items-center gap-2 mt-1">
-                        <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden">
-                            <div
-                                className="h-full bg-ios-blue rounded-full"
-                                style={{ width: `${totalPlanned > 0 ? (totalMeasured / totalPlanned) * 100 : 0}%` }}
-                            ></div>
-                        </div>
-                        <span className="text-sm font-bold text-gray-900">
-                            {(totalPlanned > 0 ? (totalMeasured / totalPlanned) * 100 : 0).toFixed(1)}%
-                        </span>
-                    </div>
+                    <p className="text-xs font-bold text-gray-400 uppercase">Realizado</p>
+                    <p className="text-xl font-bold text-ios-green mt-1">
+                        {currentRecord ? formatCurrency(currentRecord.measured || 0) : '€ 0,00'}
+                    </p>
+                </div>
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <p className="text-xs font-bold text-gray-400 uppercase">Acumulado Previsto</p>
+                    <p className="text-xl font-bold text-gray-900 mt-1">
+                        {formatCurrency(accPlannedVal)}
+                    </p>
+                </div>
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
+                    <p className="text-xs font-bold text-gray-400 uppercase">Acumulado Real</p>
+                    <p className="text-xl font-bold text-ios-blue mt-1">
+                        {formatCurrency(accMeasuredVal)}
+                    </p>
                 </div>
             </div>
 
             {/* Table */}
-            <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className={clsx(
+                "bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden transition-all duration-300",
+                !showTable && "hidden md:block" // Hidden on mobile unless toggled
+            )}>
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                         <thead>
@@ -156,10 +210,9 @@ export const ProjectFinancial: React.FC = () => {
                                 let accPlanned = 0;
                                 let accMeasured = 0;
 
-                                return records.map((record: FinancialRecord, index: number) => {
+                                return sortedRecords.map((record: FinancialRecord, index: number) => {
                                     accPlanned += record.planned || 0;
                                     accMeasured += record.measured || 0;
-                                    // Deviation = Measured - Planned (Positive = Produced More = Green)
                                     const deviation = (record.measured || 0) - (record.planned || 0);
 
                                     return (
@@ -200,13 +253,13 @@ export const ProjectFinancial: React.FC = () => {
                                                 </div>
                                             </td>
                                             <td className="p-4 whitespace-nowrap text-gray-500 text-sm">
-                                                {new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(accPlanned)}
+                                                {formatCurrency(accPlanned)}
                                             </td>
                                             <td className="p-4 whitespace-nowrap text-gray-500 text-sm">
-                                                {new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(accMeasured)}
+                                                {formatCurrency(accMeasured)}
                                             </td>
                                             <td className={clsx("p-4 whitespace-nowrap text-sm font-bold", deviation > 0 ? "text-green-500" : deviation < 0 ? "text-red-500" : "text-gray-400")}>
-                                                {deviation === 0 ? '-' : new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' }).format(deviation)}
+                                                {deviation === 0 ? '-' : formatCurrency(deviation)}
                                             </td>
                                             <td className="p-4 text-center">
                                                 {canEdit && (
@@ -224,7 +277,7 @@ export const ProjectFinancial: React.FC = () => {
                             })()}
                             {records.length === 0 && (
                                 <tr>
-                                    <td colSpan={4} className="p-8 text-center text-gray-400">
+                                    <td colSpan={7} className="p-8 text-center text-gray-400">
                                         Nenhum registro financeiro.
                                     </td>
                                 </tr>
@@ -232,6 +285,16 @@ export const ProjectFinancial: React.FC = () => {
                         </tbody>
                     </table>
                 </div>
+            </div>
+
+            {/* Mobile Toggle Button */}
+            <div className="md:hidden mt-6 flex justify-center">
+                <button
+                    onClick={() => setShowTable(!showTable)}
+                    className="bg-white/10 backdrop-blur-md text-white px-6 py-3 rounded-full border border-white/20 font-bold shadow-lg transition-all active:scale-95"
+                >
+                    {showTable ? 'Esconder Tabela' : 'Ver Tabela Completa'}
+                </button>
             </div>
         </div>
     );
