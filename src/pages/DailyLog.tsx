@@ -5,7 +5,7 @@ import { db } from '../services/firebase';
 import { useAuth } from '../context/AuthContext';
 import { useProjects } from '../hooks/useProjects';
 import type { DailyLog as DailyLogType, WorkforceItem } from '../types';
-import { CaretLeft, CloudSun, Users, Check, Plus, Trash, Camera, Spinner, Copy } from '@phosphor-icons/react';
+import { CaretLeft, CloudSun, Users, Check, Plus, Trash, Camera, Spinner, Copy, PencilSimple } from '@phosphor-icons/react';
 import clsx from 'clsx';
 import { format, parseISO, subDays } from 'date-fns';
 import { pt } from 'date-fns/locale';
@@ -43,9 +43,6 @@ export const DailyLog: React.FC = () => {
     useEffect(() => {
         if (!id || !date || !profile) return;
 
-        // Check if client (read-only)
-        if (profile.role !== 'client') setIsEditing(true);
-
         const loadLog = async () => {
             try {
                 const docRef = doc(db, `users/${profile.masterUid}/projects/${id}/dailyLogs/${date}`);
@@ -53,8 +50,13 @@ export const DailyLog: React.FC = () => {
 
                 if (snap.exists()) {
                     setLog(snap.data() as DailyLogType);
+                    setIsEditing(false); // Valid log exists, start in view mode
                 } else {
                     setLog(createEmptyLog());
+                    // New log, start in edit mode only if not client
+                    if (profile.role !== 'client') {
+                        setIsEditing(true);
+                    }
                 }
             } catch (error) {
                 console.error("Error loading log:", error);
@@ -73,6 +75,7 @@ export const DailyLog: React.FC = () => {
             const docRef = doc(db, `users/${profile.masterUid}/projects/${id}/dailyLogs/${date}`);
             await setDoc(docRef, log, { merge: true });
             alert("Salvo com sucesso!");
+            setIsEditing(false); // Return to view mode
         } catch (error) {
             alert("Erro ao salvar.");
         } finally {
@@ -108,12 +111,11 @@ export const DailyLog: React.FC = () => {
         if (!confirm("Isso irá substituir o efetivo atual pelo último efetivo lançado. Continuar?")) return;
 
         try {
-            // Query last 10 logs before current date to find one with workforce
+            // Query last 30 days logic (unchanged)
             const currentDay = parseISO(date);
             let foundLog: DailyLogType | null = null;
             let foundDate = "";
 
-            // Check last 30 days one by one to avoid Firestore Index errors
             for (let i = 1; i <= 30; i++) {
                 const prevDate = subDays(currentDay, i);
                 const prevDateStr = format(prevDate, 'yyyy-MM-dd');
@@ -159,7 +161,7 @@ export const DailyLog: React.FC = () => {
                     </h2>
                     <p className="text-xs text-gray-500 uppercase font-bold">Diário de Obra</p>
                 </div>
-                <div className="w-10"></div> {/* Spacer for center alignment */}
+                <div className="w-10"></div>
             </div>
 
             <div className="space-y-6">
@@ -235,7 +237,6 @@ export const DailyLog: React.FC = () => {
                                         disabled={!isEditing}
                                     />
 
-                                    {/* Company Selector */}
                                     <select
                                         className="w-full bg-transparent text-xs text-gray-500 outline-none -ml-1 py-1"
                                         value={item.company}
@@ -247,7 +248,6 @@ export const DailyLog: React.FC = () => {
                                         {companies.map(comp => (
                                             <option key={comp.id} value={comp.name}>{comp.name}</option>
                                         ))}
-                                        {/* Fallback if current value is not in list (legacy data) */}
                                         {item.company && item.company !== 'Própria' && !companies.find(c => c.name === item.company) && (
                                             <option value={item.company}>{item.company}</option>
                                         )}
@@ -303,24 +303,34 @@ export const DailyLog: React.FC = () => {
                         <span>Galeria de Fotos</span>
                     </div>
                     <PhotoUpload
-                        photos={[...log.photos, ...log.eventPhotos, ...log.materialPhotos]} // Combined for simplicity, or separate if needed
+                        photos={[...log.photos, ...log.eventPhotos, ...log.materialPhotos]}
                         path={`users/${profile?.masterUid}/projects/${id}/photos`}
                         isEditing={isEditing}
                         onUpdate={(newPhotos) => updateLog('photos', newPhotos)}
                     />
                 </section>
 
-                {/* Save Button (Float) */}
-                {isEditing && (
+                {/* Floating Action Button: Edit or Save */}
+                {profile?.role !== 'client' && (
                     <div className="fixed bottom-6 right-6 md:static md:mt-6">
-                        <button
-                            onClick={handleSave}
-                            disabled={saving}
-                            className="bg-ios-green text-white px-6 py-3 rounded-full md:rounded-xl font-bold shadow-lg shadow-green-200 flex items-center gap-2 hover:bg-green-600 transition-transform active:scale-95 w-full md:w-auto justify-center"
-                        >
-                            {saving ? <Spinner className="animate-spin" /> : <Check size={20} weight="bold" />}
-                            <span>Salvar Diário</span>
-                        </button>
+                        {isEditing ? (
+                            <button
+                                onClick={handleSave}
+                                disabled={saving}
+                                className="bg-ios-green text-white px-6 py-3 rounded-full md:rounded-xl font-bold shadow-lg shadow-green-200 flex items-center gap-2 hover:bg-green-600 transition-transform active:scale-95 w-full md:w-auto justify-center"
+                            >
+                                {saving ? <Spinner className="animate-spin" /> : <Check size={20} weight="bold" />}
+                                <span>Salvar Diário</span>
+                            </button>
+                        ) : (
+                            <button
+                                onClick={() => setIsEditing(true)}
+                                className="bg-ios-blue text-gray-900 px-6 py-3 rounded-full md:rounded-xl font-bold shadow-lg shadow-yellow-200 flex items-center gap-2 hover:bg-yellow-400 transition-transform active:scale-95 w-full md:w-auto justify-center"
+                            >
+                                <PencilSimple size={20} weight="bold" />
+                                <span>Editar Diário</span>
+                            </button>
+                        )}
                     </div>
                 )}
             </div>
